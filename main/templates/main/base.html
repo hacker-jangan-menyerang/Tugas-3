@@ -1,0 +1,68 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Digital Library{% endblock %}</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        primary: '#0f172a',
+                        accent: '#8b0000',
+                        blood: '#8b0000',
+                        'blood-bright': '#a01010',
+                        'blood-light': '#fdf2f2',
+                    },
+                    fontFamily: {
+                        heading: ['Montserrat', 'sans-serif'],
+                        body: ['Inter', 'sans-serif'],
+                    }
+                }
+            }
+        }
+    </script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Montserrat:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        * { font-family: 'Inter', sans-serif; }
+        h1, h2, h3, h4, h5, h6 { font-family: 'Montserrat', sans-serif; }
+        ::selection { background: #8b0000; color: white; }
+    </style>
+</head>
+<body class="bg-white text-slate-800 min-h-screen flex flex-col">
+    <!-- Header -->
+    <header class="bg-slate-900 text-white shadow-lg">
+        <div class="max-w-6xl mx-auto px-6 py-4">
+            <div class="flex items-center justify-between">
+                <h1 class="text-2xl font-bold tracking-tight">
+                    <span class="text-red-700">⛓️</span> Digital Library
+                </h1>
+                <nav class="flex items-center gap-6">
+                    <a href="{% url 'main:book_list' %}" class="text-slate-300 hover:text-white transition-colors">All Books</a>
+                    <a href="{% url 'main:search_books' %}" class="text-slate-300 hover:text-white transition-colors">Search</a>
+                    {% if user.is_authenticated %}
+                        <span class="text-slate-400 text-sm">Welcome, {{ user.username }}</span>
+                    {% endif %}
+                </nav>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="flex-1 py-8 px-6">
+        <div class="max-w-6xl mx-auto">
+            {% block content %}{% endblock %}
+        </div>
+    </main>
+
+    <!-- Footer -->
+    <footer class="bg-slate-100 border-t border-slate-200 py-6 px-6">
+        <div class="max-w-6xl mx-auto text-center text-slate-500 text-sm">
+            <p>Digital Library Management System | hacker-jangan-menyerang</p>
+        </div>
+    </footer>
+</body>
+</html>
