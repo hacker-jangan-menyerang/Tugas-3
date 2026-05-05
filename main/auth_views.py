@@ -16,28 +16,30 @@ Rate limiting implementation:
 - Generic error messages prevent user enumeration (CWE-287)
 """
 
-import os
-import sys
+import datetime
+from typing import Any
 
 from django.shortcuts import render, redirect
 from django.contrib.auth import authenticate, login, logout
 from django.contrib import messages
 from django.views.decorators.http import require_http_methods
 from django.http import HttpResponseForbidden
+from django.core.cache import cache
+from django.utils import timezone
 
 from .forms import LoginForm, RegisterForm
 
-# In-memory login attempt tracking (per-process)
-# For production, use Redis or database-backed tracking
-# Key format: "ip_address:username" to prevent locking real users
-_login_attempts = {}  # {"ip:username": {"count": int, "lockout_until": datetime}}
+FAILURE_LIMIT = 5
+LOCKOUT_DURATION = datetime.timedelta(minutes=15)
 
-# Debug flag - always False unless explicitly enabled
-_DEBUG_LOGIN = False
+def _get_attempts(key):
+    """Get attempt data from cache for a key."""
+    return cache.get(key, {'count': 0})
 
-def _debug(msg):
-    if _DEBUG_LOGIN:
-        print(f"[AUTH DEBUG] {msg}", file=sys.stderr)
+
+def _set_attempts(key, data):
+    """Persist attempt data in cache."""
+    cache.set(key, data, timeout=int(LOCKOUT_DURATION.total_seconds()))
 
 
 def _make_key(ip, username):
@@ -55,42 +57,44 @@ def _get_client_ip(request):
 
 def _is_locked_out(ip, username):
     """Check if IP+username combination is locked out due to too many failed attempts."""
-    import datetime
     key = _make_key(ip, username)
-    if key not in _login_attempts:
-        return False
-
-    lockout_until = _login_attempts[key].get('lockout_until')
-    if lockout_until and datetime.datetime.now() < lockout_until:
+    data = _get_attempts(key)
+    lockout_until = data.get('lockout_until')
+    if lockout_until and timezone.now() < lockout_until:
         return True
 
-    # Lockout expired, reset
-    if key in _login_attempts:
-        del _login_attempts[key]
+    if lockout_until:
+        cache.delete(key)
     return False
+
+
+def _get_lockout_remaining_seconds(ip, username):
+    """Return remaining lockout time in seconds for a key."""
+    key = _make_key(ip, username)
+    data = _get_attempts(key)
+    lockout_until = data.get('lockout_until')
+    if lockout_until and timezone.now() < lockout_until:
+        return max(0, int((lockout_until - timezone.now()).total_seconds()))
+    return 0
 
 
 def _record_failed_attempt(username, ip):
     """Record a failed login attempt."""
-    import datetime
-    LOCKOUT_DURATION = datetime.timedelta(minutes=15)
-    FAILURE_LIMIT = 5
-
     key = _make_key(ip, username)
-    if key not in _login_attempts:
-        _login_attempts[key] = {'count': 0}
+    data = _get_attempts(key)
+    data['count'] = data.get('count', 0) + 1
 
-    _login_attempts[key]['count'] += 1
+    if data['count'] >= FAILURE_LIMIT:
+        data['lockout_until'] = timezone.now() + LOCKOUT_DURATION
 
-    if _login_attempts[key]['count'] >= FAILURE_LIMIT:
-        _login_attempts[key]['lockout_until'] = datetime.datetime.now() + LOCKOUT_DURATION
+    _set_attempts(key, data)
+    return data
 
 
 def _record_success(username, ip):
     """Reset failed attempts on successful login."""
     key = _make_key(ip, username)
-    if key in _login_attempts:
-        del _login_attempts[key]
+    cache.delete(key)
 
 
 @require_http_methods(["GET", "POST"])
@@ -107,33 +111,29 @@ def login_view(request):
     - Failed login: generic message (no user enumeration)
     - Rate limiting: 5 failed attempts = 15 minute lockout (CWE-307)
     """
-    global _login_attempts
-
-    _debug(f"login_view called, method={request.method}, user={request.user}")
-
     if request.user.is_authenticated:
         return _redirect_by_role(request.user)
 
     form = LoginForm()
+    context: dict[str, Any] = {'form': form}
 
     if request.method == 'POST':
-        _debug(f"POST data: {dict(request.POST)}")
         form = LoginForm(request.POST)
-        _debug(f"form.is_valid()={form.is_valid()}, errors={form.errors}")
+        context['form'] = form
         if form.is_valid():
             username = form.cleaned_data['username']
             password = form.cleaned_data['password']
             ip = _get_client_ip(request)
 
-            _debug(f"Checking lockout for ip={ip}, username={username}")
             # Check if IP+username combo is locked out
             if _is_locked_out(ip, username):
-                _debug("User is locked out")
-                messages.error(request, 'Account temporarily locked due to too many failed attempts. Please try again later.')
-                return render(request, 'main/login.html', {'form': form})
+                remaining_seconds = _get_lockout_remaining_seconds(ip, username)
+                remaining_minutes = max(1, int(remaining_seconds / 60))
+                messages.error(request, f'Account temporarily locked due to too many failed attempts. Try again in {remaining_minutes} minutes.')
+                context['lockout_seconds'] = remaining_seconds
+                return render(request, 'main/login.html', context)
 
             user = authenticate(request, username=username, password=password)
-            _debug(f"authenticate returned: {user}")
 
             if user is not None:
                 if user.is_active:
@@ -141,20 +141,20 @@ def login_view(request):
                     _record_success(username, ip)
                     return _redirect_by_role(user)
                 else:
-                    _record_failed_attempt(username, ip)
+                    data = _record_failed_attempt(username, ip)
                     messages.error(request, 'Invalid username or password.')
             else:
-                _record_failed_attempt(username, ip)
-                _debug(f"Failed attempt recorded, _login_attempts={_login_attempts}")
-                # Check if just got locked out
-                if _is_locked_out(ip, username):
-                    messages.error(request, 'Account temporarily locked due to too many failed attempts. Please try again later.')
+                data = _record_failed_attempt(username, ip)
+                if data.get('lockout_until') and _is_locked_out(ip, username):
+                    remaining_seconds = _get_lockout_remaining_seconds(ip, username)
+                    remaining_minutes = max(1, int(remaining_seconds / 60))
+                    messages.error(request, f'Account temporarily locked due to too many failed attempts. Try again in {remaining_minutes} minutes.')
+                    context['lockout_seconds'] = remaining_seconds
                 else:
-                    key = _make_key(ip, username)
-                    remaining = 5 - _login_attempts.get(key, {}).get('count', 0)
+                    remaining = max(0, FAILURE_LIMIT - data.get('count', 0))
                     messages.error(request, f'Invalid username or password. ({remaining} attempts remaining)')
 
-    return render(request, 'main/login.html', {'form': form})
+    return render(request, 'main/login.html', context)
 
 
 @require_http_methods(["GET", "POST"])

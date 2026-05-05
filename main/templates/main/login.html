@@ -94,25 +94,26 @@
 </div>
 
 <!-- Lockout countdown timer (hidden by default) -->
-<div id="lockout-timer" class="hidden fixed bottom-4 right-4 bg-red-800 text-white px-4 py-3 rounded-lg shadow-lg">
+<div id="lockout-timer" class="hidden fixed bottom-4 right-4 bg-red-800 text-white px-4 py-3 rounded-lg shadow-lg" data-lockout-seconds="{{ lockout_seconds|default:0 }}">
     <p class="font-semibold">Account Locked</p>
     <p class="text-sm">Try again in <span id="countdown-minutes">15</span> minutes</p>
 </div>
 
 <script>
 // Check for lockout message and show timer
+// Only shows timer when user is actually locked out (not just on any error)
 document.addEventListener('DOMContentLoaded', function() {
-    const messages = document.querySelectorAll('[class*="bg-red"]');
-    messages.forEach(function(msg) {
-        if (msg.textContent.includes('locked') || msg.textContent.includes('temporarily')) {
-            document.getElementById('lockout-timer').classList.remove('hidden');
-            startCountdown(15);
-        }
-    });
+    const timer = document.getElementById('lockout-timer');
+    const lockoutSeconds = parseInt(timer.getAttribute('data-lockout-seconds'), 10) || 0;
+
+    if (lockoutSeconds > 0) {
+        timer.classList.remove('hidden');
+        startCountdown(lockoutSeconds);
+    }
 });
 
-function startCountdown(minutes) {
-    let remaining = minutes * 60;
+function startCountdown(seconds) {
+    let remaining = seconds;
     const display = document.getElementById('countdown-minutes');
 
     setInterval(function() {
