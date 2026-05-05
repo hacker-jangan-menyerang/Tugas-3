@@ -89,3 +89,14 @@ STATICFILES_DIRS = [BASE_DIR / 'static']
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 AUTH_USER_MODEL = 'main.User'
+
+# Authentication URLs
+LOGIN_URL = '/login/'
+LOGIN_REDIRECT_URL = '/member/'
+LOGOUT_REDIRECT_URL = '/login/'
+
+# Session security settings
+SESSION_COOKIE_HTTPONLY = True      # Prevent JavaScript access to session cookie
+SESSION_COOKIE_SAMESITE = 'Lax'    # CSRF protection for session cookie
+SESSION_EXPIRE_AT_BROWSER_CLOSE = False
+SESSION_COOKIE_AGE = 3600          # Session expires after 1 hour of inactivity

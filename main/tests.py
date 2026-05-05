@@ -181,3 +181,373 @@ class SQLInjectionModelTests(TestCase):
 
         # If we get here, ORM is working
         self.assertTrue(True)
+
+
+# ================================================================
+# CSRF Protection Test Cases
+# Benedictus Lucky Win Ziraluo — CSRF Specialist
+#
+# Test Cases:
+# - TC-CSRF-01: POST /member/borrow/<id>/ tanpa CSRF token → 403
+# - TC-CSRF-02: POST dengan CSRF token salah → 403
+# - TC-CSRF-03: POST dengan CSRF token valid → sukses
+# - TC-IDOR-01: Member A coba akses return milik Member B → 404
+#
+# Run with: python manage.py test main.tests --verbosity=2
+# ================================================================
+
+
+class CSRFProtectionTests(TestCase):
+    """
+    Test CSRF protection on member write operations.
+
+    Verifies CWE-352 mitigation:
+    - All POST endpoints require valid CSRF token
+    - Missing token → 403 Forbidden
+    - Wrong token → 403 Forbidden
+    - Valid token → request processed
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        from main.models import Book, Category
+        cls.category = Category.objects.create(name='CSRF Test Category')
+        cls.book = Book.objects.create(
+            title='CSRF Test Book',
+            author='Test Author',
+            isbn='999-000-111',
+            status='available',
+            category=cls.category
+        )
+        cls.member = User.objects.create_user(
+            username='csrfmember',
+            password='testpass123',
+            role='member',
+            membership_number='MBR-CSRF-01'
+        )
+
+    def test_tc_csrf_01_post_without_csrf_token(self):
+        """
+        TC-CSRF-01: POST /member/borrow/<id>/ tanpa CSRF token → 403 Forbidden
+
+        Simulates an attacker's cross-site form that lacks CSRF token.
+        Django's CsrfViewMiddleware must reject this request.
+        """
+        # Login first
+        self.client.login(username='csrfmember', password='testpass123')
+
+        # POST without CSRF token (enforce_csrf_checks=True)
+        csrf_client = Client(enforce_csrf_checks=True)
+        csrf_client.login(username='csrfmember', password='testpass123')
+
+        response = csrf_client.post(
+            f'/member/borrow/{self.book.id}/',
+            {}  # No CSRF token
+        )
+
+        self.assertEqual(response.status_code, 403,
+            "POST without CSRF token should return 403 Forbidden")
+
+    def test_tc_csrf_02_post_with_wrong_csrf_token(self):
+        """
+        TC-CSRF-02: POST dengan CSRF token salah → 403 Forbidden
+
+        Even with a token, if it doesn't match the session's token,
+        the request must be rejected.
+        """
+        csrf_client = Client(enforce_csrf_checks=True)
+        csrf_client.login(username='csrfmember', password='testpass123')
+
+        response = csrf_client.post(
+            f'/member/borrow/{self.book.id}/',
+            {'csrfmiddlewaretoken': 'invalid-token-12345'}
+        )
+
+        self.assertEqual(response.status_code, 403,
+            "POST with wrong CSRF token should return 403 Forbidden")
+
+    def test_tc_csrf_03_post_with_valid_csrf_token(self):
+        """
+        TC-CSRF-03: POST dengan CSRF token valid → sukses (borrow berhasil)
+
+        Normal flow: GET the form page (receives CSRF cookie),
+        then POST with the valid token.
+        """
+        csrf_client = Client(enforce_csrf_checks=True)
+        csrf_client.login(username='csrfmember', password='testpass123')
+
+        # GET the borrow page first (sets CSRF cookie)
+        get_response = csrf_client.get(f'/member/borrow/{self.book.id}/')
+        self.assertEqual(get_response.status_code, 200)
+
+        # Extract CSRF token from cookies
+        csrf_token = csrf_client.cookies['csrftoken'].value
+
+        # POST with valid CSRF token
+        response = csrf_client.post(
+            f'/member/borrow/{self.book.id}/',
+            {'csrfmiddlewaretoken': csrf_token}
+        )
+
+        # Should redirect to history on success (302)
+        self.assertEqual(response.status_code, 302,
+            "POST with valid CSRF token should succeed (302 redirect)")
+
+        # Verify the borrow transaction was created
+        from main.models import BorrowTransaction
+        tx_exists = BorrowTransaction.objects.filter(
+            book=self.book,
+            borrower=self.member,
+            status='borrowed'
+        ).exists()
+        self.assertTrue(tx_exists, "BorrowTransaction should be created")
+
+    def test_csrf_on_return_endpoint(self):
+        """Verify CSRF also protects the return endpoint."""
+        from main.models import BorrowTransaction
+        from django.utils import timezone
+        from datetime import timedelta
+
+        # Create a borrow transaction to return
+        tx = BorrowTransaction.objects.create(
+            book=self.book,
+            borrower=self.member,
+            membership_number=self.member.membership_number,
+            due_date=timezone.now() + timedelta(days=14),
+            status='borrowed'
+        )
+
+        csrf_client = Client(enforce_csrf_checks=True)
+        csrf_client.login(username='csrfmember', password='testpass123')
+
+        # POST without CSRF token
+        response = csrf_client.post(f'/member/return/{tx.id}/', {})
+        self.assertEqual(response.status_code, 403,
+            "Return endpoint should also require CSRF token")
+
+
+class IDORPreventionTests(TestCase):
+    """
+    Test IDOR (Insecure Direct Object Reference) prevention.
+
+    Verifies CWE-639 mitigation:
+    - Member A cannot return Member B's books
+    - Borrow history only shows own transactions
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        from main.models import Book, Category, BorrowTransaction
+        from django.utils import timezone
+        from datetime import timedelta
+
+        cls.category = Category.objects.create(name='IDOR Test Category')
+        cls.book = Book.objects.create(
+            title='IDOR Test Book',
+            author='Test Author',
+            isbn='888-000-111',
+            status='not_available',
+            category=cls.category
+        )
+
+        cls.member_a = User.objects.create_user(
+            username='member_a', password='testpass123',
+            role='member', membership_number='MBR-A'
+        )
+        cls.member_b = User.objects.create_user(
+            username='member_b', password='testpass123',
+            role='member', membership_number='MBR-B'
+        )
+
+        # Transaction belongs to Member B
+        cls.tx_b = BorrowTransaction.objects.create(
+            book=cls.book,
+            borrower=cls.member_b,
+            membership_number=cls.member_b.membership_number,
+            due_date=timezone.now() + timedelta(days=14),
+            status='borrowed'
+        )
+
+    def test_tc_idor_01_member_a_cannot_return_member_b_book(self):
+        """
+        TC-IDOR-01: Member A coba return buku milik Member B → 404
+
+        The return view filters by borrower=request.user,
+        so Member A will get 404 (transaction not found for them).
+        """
+        self.client.login(username='member_a', password='testpass123')
+
+        # Member A tries to return Member B's transaction
+        response = self.client.post(f'/member/return/{self.tx_b.id}/')
+
+        # Should be 404 because get_object_or_404 filters by borrower=request.user
+        self.assertEqual(response.status_code, 404,
+            "Member A should not be able to return Member B's book (should get 404)")
+
+    def test_idor_history_only_shows_own_transactions(self):
+        """
+        Verify borrow history only shows the logged-in user's transactions.
+        Member A should NOT see Member B's transaction.
+        """
+        self.client.login(username='member_a', password='testpass123')
+
+        response = self.client.get('/member/history/')
+        self.assertEqual(response.status_code, 200)
+
+        content = response.content.decode('utf-8')
+        # Member A should NOT see Member B's book in their history
+        self.assertNotIn('IDOR Test Book', content,
+            "Member A should not see Member B's transaction in history")
+
+
+class BorrowReturnFlowTests(TestCase):
+    """
+    Test the complete borrow → return flow.
+
+    Verifies:
+    - Book status changes correctly (OCL invariants)
+    - Server-side timestamps are set
+    - membership_number is tracked (accountability)
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        from main.models import Book, Category
+
+        cls.category = Category.objects.create(name='Flow Test Category')
+        cls.book = Book.objects.create(
+            title='Flow Test Book',
+            author='Test Author',
+            isbn='777-000-111',
+            status='available',
+            category=cls.category
+        )
+        cls.member = User.objects.create_user(
+            username='flowmember', password='testpass123',
+            role='member', membership_number='MBR-FLOW-01'
+        )
+
+    def test_borrow_changes_book_status(self):
+        """
+        TC-BORROW-01: Borrow available book → status becomes 'not_available'.
+        """
+        self.client.login(username='flowmember', password='testpass123')
+
+        response = self.client.post(f'/member/borrow/{self.book.id}/')
+        self.assertEqual(response.status_code, 302)  # Redirect on success
+
+        # Verify book status changed
+        self.book.refresh_from_db()
+        self.assertEqual(self.book.status, 'not_available',
+            "Book status should change to 'not_available' after borrow")
+
+    def test_return_restores_book_status(self):
+        """
+        TC-RETURN-01: Return book → status becomes 'available', return_date set.
+        """
+        from main.models import BorrowTransaction
+        from django.utils import timezone
+        from datetime import timedelta
+
+        self.client.login(username='flowmember', password='testpass123')
+
+        # Create a borrow transaction
+        tx = BorrowTransaction.objects.create(
+            book=self.book,
+            borrower=self.member,
+            membership_number=self.member.membership_number,
+            due_date=timezone.now() + timedelta(days=14),
+            status='borrowed'
+        )
+        self.book.status = 'not_available'
+        self.book.save()
+
+        # Return the book
+        response = self.client.post(f'/member/return/{tx.id}/')
+        self.assertEqual(response.status_code, 302)
+
+        # Verify book status restored
+        self.book.refresh_from_db()
+        self.assertEqual(self.book.status, 'available',
+            "Book status should change back to 'available' after return")
+
+        # Verify transaction updated
+        tx.refresh_from_db()
+        self.assertEqual(tx.status, 'returned')
+        self.assertIsNotNone(tx.return_date,
+            "return_date should be set by server after return")
+
+    def test_server_side_timestamp(self):
+        """
+        TC-TIMESTAMP-01: Verify timestamps are set by server, not user input.
+        """
+        from main.models import BorrowTransaction
+        from django.utils import timezone
+
+        self.client.login(username='flowmember', password='testpass123')
+
+        before = timezone.now()
+        self.client.post(f'/member/borrow/{self.book.id}/')
+        after = timezone.now()
+
+        tx = BorrowTransaction.objects.filter(
+            book=self.book, borrower=self.member
+        ).first()
+
+        self.assertIsNotNone(tx, "Transaction should exist")
+        # borrow_date should be between before and after (server timestamp)
+        self.assertGreaterEqual(tx.borrow_date, before,
+            "borrow_date should be server-side timestamp (not before request)")
+        self.assertLessEqual(tx.borrow_date, after,
+            "borrow_date should be server-side timestamp (not after request)")
+
+    def test_membership_number_tracked(self):
+        """
+        Verify membership_number is automatically recorded from user profile.
+        (OCL: AccountabilityMemberTracked)
+        """
+        from main.models import BorrowTransaction
+
+        self.client.login(username='flowmember', password='testpass123')
+        self.client.post(f'/member/borrow/{self.book.id}/')
+
+        tx = BorrowTransaction.objects.filter(
+            book=self.book, borrower=self.member
+        ).first()
+
+        self.assertEqual(tx.membership_number, 'MBR-FLOW-01',
+            "membership_number should be automatically set from user profile")
+
+
+class RoleAccessTests(TestCase):
+    """Test that member endpoints enforce role-based access."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.member = User.objects.create_user(
+            username='rolemember', password='testpass123',
+            role='member', membership_number='MBR-ROLE'
+        )
+        cls.librarian = User.objects.create_user(
+            username='rolelibrarian', password='testpass123',
+            role='librarian', employee_id='EMP-ROLE'
+        )
+
+    def test_unauthenticated_redirects_to_login(self):
+        """Unauthenticated user accessing member page → redirect to login."""
+        response = self.client.get('/member/')
+        self.assertEqual(response.status_code, 302)
+        self.assertIn('/login/', response.url)
+
+    def test_librarian_cannot_access_member_dashboard(self):
+        """Librarian accessing member dashboard → 403 Forbidden."""
+        self.client.login(username='rolelibrarian', password='testpass123')
+        response = self.client.get('/member/')
+        self.assertEqual(response.status_code, 403,
+            "Librarian should not access member dashboard (least privilege)")
+
+    def test_member_can_access_member_dashboard(self):
+        """Member accessing member dashboard → 200 OK."""
+        self.client.login(username='rolemember', password='testpass123')
+        response = self.client.get('/member/')
+        self.assertEqual(response.status_code, 200)

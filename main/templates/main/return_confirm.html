@@ -1,0 +1,72 @@
+{% extends 'main/base.html' %}
+
+{% block title %}Return "{{ transaction.book.title }}" - Digital Library{% endblock %}
+
+{% block content %}
+<div class="max-w-2xl mx-auto space-y-6">
+    <nav class="flex items-center gap-2 text-sm text-slate-500">
+        <a href="{% url 'main:member_dashboard' %}" class="hover:text-red-800 transition-colors">Dashboard</a>
+        <span>/</span>
+        <a href="{% url 'main:borrow_history' %}" class="hover:text-red-800 transition-colors">History</a>
+        <span>/</span>
+        <span class="text-slate-700">Return Book</span>
+    </nav>
+
+    <div class="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+        <div class="bg-slate-900 px-6 py-4">
+            <h2 class="text-xl font-bold text-white">Confirm Return</h2>
+            <p class="text-slate-400 text-sm mt-1">Return this borrowed book</p>
+        </div>
+        <div class="h-1 bg-gradient-to-r from-red-800 via-red-600 to-red-800"></div>
+
+        <div class="p-6 space-y-4">
+            <div class="bg-slate-50 rounded-xl p-4 space-y-3">
+                <h3 class="text-lg font-semibold text-slate-900">{{ transaction.book.title }}</h3>
+                <div class="grid grid-cols-2 gap-3 text-sm">
+                    <div>
+                        <span class="text-slate-500">Author</span>
+                        <p class="font-medium text-slate-800">{{ transaction.book.author }}</p>
+                    </div>
+                    <div>
+                        <span class="text-slate-500">Borrowed On</span>
+                        <p class="font-medium text-slate-800">{{ transaction.borrow_date|date:"d M Y, H:i" }}</p>
+                    </div>
+                    <div>
+                        <span class="text-slate-500">Due Date</span>
+                        <p class="font-medium text-slate-800">{{ transaction.due_date|date:"d M Y, H:i" }}</p>
+                    </div>
+                    <div>
+                        <span class="text-slate-500">Status</span>
+                        <p class="font-medium text-amber-700">📖 Currently Borrowed</p>
+                    </div>
+                </div>
+            </div>
+
+            {% if transaction.status == 'borrowed' %}
+                <!-- CSRF Protection (CWE-352): token verified server-side -->
+                <form method="post" id="return-form">
+                    {% csrf_token %}
+                    <div class="flex gap-3">
+                        <button type="submit" id="confirm-return-btn"
+                                class="flex-1 px-4 py-3 bg-green-700 text-white font-semibold rounded-lg hover:bg-green-800 transition-all">
+                            ✓ Confirm Return
+                        </button>
+                        <a href="{% url 'main:borrow_history' %}"
+                           class="px-6 py-3 bg-slate-200 text-slate-700 font-medium rounded-lg hover:bg-slate-300 transition-colors text-center">
+                            Cancel
+                        </a>
+                    </div>
+                </form>
+            {% else %}
+                <div class="px-4 py-3 bg-green-50 border border-green-200 rounded-lg text-green-700 text-sm">
+                    This book has already been returned.
+                </div>
+                <a href="{% url 'main:borrow_history' %}"
+                   class="block text-center px-4 py-3 bg-slate-200 text-slate-700 font-medium rounded-lg hover:bg-slate-300 transition-colors">
+                    ← Back to History
+                </a>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endblock %}

@@ -1,0 +1,129 @@
+{% extends 'main/base.html' %}
+
+{% block title %}Member Dashboard - Digital Library{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <!-- Page Header -->
+    <div class="flex items-center justify-between">
+        <div>
+            <h2 class="text-3xl font-bold text-slate-900">Member Dashboard</h2>
+            <p class="text-slate-500 mt-1">
+                Welcome, <span class="font-medium text-slate-700">{{ user.username }}</span>
+                {% if user.membership_number %}
+                    <span class="text-xs bg-slate-100 text-slate-600 px-2 py-1 rounded-full ml-2">
+                        {{ user.membership_number }}
+                    </span>
+                {% endif %}
+            </p>
+        </div>
+        <a href="{% url 'main:borrow_history' %}"
+           class="px-5 py-2.5 bg-slate-900 text-white font-medium rounded-lg hover:bg-red-800 transition-colors"
+           id="view-history-btn">
+            📋 My Borrow History
+        </a>
+    </div>
+
+    <!-- Messages -->
+    {% if messages %}
+        {% for message in messages %}
+            <div class="px-4 py-3 rounded-lg text-sm font-medium
+                {% if message.tags == 'error' %}
+                    bg-red-50 text-red-700 border border-red-200
+                {% elif message.tags == 'success' %}
+                    bg-green-50 text-green-700 border border-green-200
+                {% elif message.tags == 'warning' %}
+                    bg-amber-50 text-amber-700 border border-amber-200
+                {% else %}
+                    bg-blue-50 text-blue-700 border border-blue-200
+                {% endif %}
+            ">
+                {{ message }}
+            </div>
+        {% endfor %}
+    {% endif %}
+
+    <!-- Book Grid -->
+    {% if books %}
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {% for book in books %}
+                <div class="bg-white rounded-xl border border-slate-200 overflow-hidden hover:shadow-xl hover:-translate-y-1 transition-all duration-300 group flex flex-col"
+                     id="book-card-{{ book.id }}">
+                    <!-- Card Body -->
+                    <div class="p-5 space-y-3 flex-1">
+                        <div class="flex items-start justify-between gap-2">
+                            <h3 class="text-lg font-semibold text-slate-900 group-hover:text-red-800 transition-colors line-clamp-2">
+                                {{ book.title }}
+                            </h3>
+                            {% if book.status == 'available' %}
+                                <span class="shrink-0 px-2 py-1 text-xs font-medium bg-green-100 text-green-700 rounded-full">
+                                    Available
+                                </span>
+                            {% else %}
+                                <span class="shrink-0 px-2 py-1 text-xs font-medium bg-red-100 text-red-700 rounded-full">
+                                    Borrowed
+                                </span>
+                            {% endif %}
+                        </div>
+
+                        <p class="text-sm text-slate-500">
+                            <span class="font-medium text-slate-700">Author:</span> {{ book.author }}
+                        </p>
+
+                        <p class="text-sm text-slate-500">
+                            <span class="font-medium text-slate-700">ISBN:</span> {{ book.isbn }}
+                        </p>
+
+                        <p class="text-sm text-slate-500">
+                            <span class="font-medium text-slate-700">Category:</span>
+                            <span class="inline-block px-2 py-0.5 bg-slate-100 text-slate-600 rounded text-xs">
+                                {{ book.category.name|default:"Uncategorized" }}
+                            </span>
+                        </p>
+                    </div>
+
+                    <!-- Card Footer -->
+                    <div class="px-5 py-4 bg-slate-50 border-t border-slate-100 flex gap-2">
+                        {% if book.status == 'available' %}
+                            {% if book.id in active_borrows %}
+                                <span class="flex-1 text-center px-4 py-2 bg-amber-100 text-amber-700 font-medium rounded-lg text-sm">
+                                    Already Borrowed
+                                </span>
+                            {% else %}
+                                <a href="{% url 'main:borrow_book' book.id %}"
+                                   class="flex-1 text-center px-4 py-2 bg-red-800 text-white font-medium rounded-lg hover:bg-red-900 transition-colors"
+                                   id="borrow-btn-{{ book.id }}">
+                                    📖 Borrow
+                                </a>
+                            {% endif %}
+                        {% else %}
+                            {% if book.id in active_borrows %}
+                                <a href="{% url 'main:read_online' book.id %}"
+                                   class="flex-1 text-center px-4 py-2 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 transition-colors"
+                                   id="read-btn-{{ book.id }}">
+                                    📖 Read Online
+                                </a>
+                            {% else %}
+                                <span class="flex-1 text-center px-4 py-2 bg-slate-200 text-slate-500 font-medium rounded-lg text-sm cursor-not-allowed">
+                                    Not Available
+                                </span>
+                            {% endif %}
+                        {% endif %}
+                        <a href="{% url 'main:book_detail' book.id %}"
+                           class="px-4 py-2 bg-slate-200 text-slate-700 font-medium rounded-lg hover:bg-slate-300 transition-colors text-sm">
+                            Details
+                        </a>
+                    </div>
+                </div>
+            {% endfor %}
+        </div>
+    {% else %}
+        <!-- Empty State -->
+        <div class="text-center py-16 bg-slate-50 rounded-xl border border-slate-200">
+            <div class="text-4xl mb-4">📚</div>
+            <h3 class="text-lg font-medium text-slate-700 mb-2">No books available</h3>
+            <p class="text-slate-500">Check back later for new additions.</p>
+        </div>
+    {% endif %}
+</div>
+{% endblock %}
