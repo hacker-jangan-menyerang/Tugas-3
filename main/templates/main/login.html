@@ -83,11 +83,45 @@
             <!-- Footer -->
             <div class="px-6 py-4 bg-slate-50 border-t border-slate-200 text-center">
                 <p class="text-sm text-slate-500">
-                    Secure login with CSRF protection
-                    <span class="inline-block w-2 h-2 bg-green-500 rounded-full ml-1"></span>
+                    Don't have an account?
+                    <a href="{% url 'main:register' %}" class="text-red-700 hover:text-red-800 font-medium">
+                        Register here
+                    </a>
                 </p>
             </div>
         </div>
     </div>
 </div>
+
+<!-- Lockout countdown timer (hidden by default) -->
+<div id="lockout-timer" class="hidden fixed bottom-4 right-4 bg-red-800 text-white px-4 py-3 rounded-lg shadow-lg">
+    <p class="font-semibold">Account Locked</p>
+    <p class="text-sm">Try again in <span id="countdown-minutes">15</span> minutes</p>
+</div>
+
+<script>
+// Check for lockout message and show timer
+document.addEventListener('DOMContentLoaded', function() {
+    const messages = document.querySelectorAll('[class*="bg-red"]');
+    messages.forEach(function(msg) {
+        if (msg.textContent.includes('locked') || msg.textContent.includes('temporarily')) {
+            document.getElementById('lockout-timer').classList.remove('hidden');
+            startCountdown(15);
+        }
+    });
+});
+
+function startCountdown(minutes) {
+    let remaining = minutes * 60;
+    const display = document.getElementById('countdown-minutes');
+
+    setInterval(function() {
+        remaining--;
+        if (remaining <= 0) {
+            location.reload();
+        }
+        display.textContent = Math.ceil(remaining / 60);
+    }, 1000);
+}
+</script>
 {% endblock %}
