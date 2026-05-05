@@ -3,6 +3,7 @@ from . import views
 from . import search_views
 from . import auth_views
 from . import member_views
+from . import admin_views
 
 app_name = 'main'
 
@@ -29,4 +30,17 @@ urlpatterns = [
     path('member/return/<int:transaction_id>/', member_views.return_book, name='return_book'),
     path('member/history/', member_views.borrow_history, name='borrow_history'),
     path('member/read/<int:book_id>/', member_views.read_online, name='read_online'),
+
+    # Admin dashboard (Galih)
+    path('admin-panel/', admin_views.admin_dashboard, name='admin_dashboard'),
+
+    # Admin user management (Galih)
+    path('admin-panel/users/', admin_views.user_list, name='user_list'),
+    path('admin-panel/users/create/', admin_views.user_create, name='user_create'),
+    path('admin-panel/users/<int:user_id>/', admin_views.user_detail, name='user_detail'),
+    path('admin-panel/users/<int:user_id>/toggle/', admin_views.user_toggle_active, name='user_toggle_active'),
+    path('admin-panel/users/<int:user_id>/role/', admin_views.user_change_role, name='user_change_role'),
+
+    # Audit log view (Galih)
+    path('admin-panel/audit-log/', admin_views.audit_log_list, name='audit_log_list'),
 ]

@@ -223,5 +223,5 @@ def _redirect_by_role(user):
     elif user.role == 'librarian':
         return redirect('main:book_list')  # Placeholder until Roberto builds librarian dashboard
     elif user.role == 'admin':
-        return redirect('main:book_list')  # Placeholder until Galih builds admin dashboard
+        return redirect('main:admin_dashboard')  # Placeholder until Galih builds admin dashboard
     return redirect('main:book_list')

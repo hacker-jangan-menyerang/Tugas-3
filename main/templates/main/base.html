@@ -48,6 +48,7 @@
                             <a href="{% url 'main:member_dashboard' %}" class="text-slate-300 hover:text-white transition-colors">Dashboard</a>
                             <a href="{% url 'main:borrow_history' %}" class="text-slate-300 hover:text-white transition-colors">My History</a>
                         {% elif user.role == 'admin' %}
+                            <a href="{% url 'main:admin_dashboard' %}" class="text-slate-300 hover:text-white transition-colors">Dashboard</a>
                             <a href="{% url 'main:lockout_admin' %}" class="text-slate-300 hover:text-white transition-colors">Admin Panel</a>
                         {% endif %}
                         <span class="text-slate-400 text-sm">{{ user.username }} ({{ user.get_role_display }})</span>
