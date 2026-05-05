@@ -13,6 +13,7 @@ urlpatterns = [
     # Auth (minimal — Kevin will enhance with rate limiting etc.)
     path('login/', auth_views.login_view, name='login'),
     path('logout/', auth_views.logout_view, name='logout'),
+    path('register/', auth_views.register_view, name='register'),
 
     # Public book views (Vincent)
     path('books/', search_views.book_list, name='book_list'),

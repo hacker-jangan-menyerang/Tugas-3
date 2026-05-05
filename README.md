@@ -120,10 +120,14 @@ PKPL26_68_hacker-jangan-menyerang/
 ├── main/
 │   ├── models.py         # User, Book, Category, BorrowTransaction, AuditLog
 │   ├── views.py          # Health check endpoint
+│   ├── auth_views.py     # Login, logout, register (with rate limiting)
 │   ├── search_views.py   # Book list, search, detail (SQL injection safe)
+│   ├── member_views.py   # Member dashboard and borrow/return
 │   ├── urls.py           # URL routing
 │   ├── admin.py          # Admin panel
-│   ├── tests.py          # 8 SQL injection test cases
+│   ├── decorators.py     # @role_required decorator
+│   ├── forms.py          # LoginForm, RegisterForm
+│   ├── tests.py          # All test cases (SQLi, CSRF, Auth, RBAC)
 │   └── templates/main/   # HTML templates with 하자메 design
 ├── docs/
 │   └── erd_diagram.md    # ERD documentation
@@ -143,20 +147,147 @@ PKPL26_68_hacker-jangan-menyerang/
 | Category | Implementation |
 |----------|----------------|
 | **SQL Injection** | Django ORM Q objects, no raw SQL |
-| **XSS** | Django auto-escape, no `\|safe` filters |
+| **XSS** | Django auto-escape, no `|safe` filters |
 | **CSRF** | CsrfViewMiddleware enabled, all forms use `{% csrf_token %}` |
-| **Broken Auth** | PBKDF2 password hashing, rate limiting via django-axes (Kevin) |
-| **RBAC** | @role_required decorators (Kevin) |
+| **Broken Auth** | PBKDF2 password hashing, rate limiting (5 attempts = 15 min lockout) |
+| **RBAC** | @role_required decorators for least privilege |
 | **Soft Delete** | `is_deleted` flag on Book model |
+
+---
+
+## Broken Authentication Mitigation (Kevin)
+
+### Overview
+
+Authentication system implements multiple security measures to prevent:
+- **CWE-287**: Improper Authentication (password hashing, session management)
+- **CWE-307**: Brute Force (rate limiting, account lockout)
+- **CWE-256**: Plaintext Storage of Password (PBKDF2 hashing)
+- **CWE-384**: Session Fixation (session flush on logout)
+
+### Rate Limiting Login Attempts
+
+**Lockout Duration:** 15 minutes after 5 failed attempts
+
+**Before (Vulnerable - No Rate Limiting):**
+```python
+# VULNERABLE: No protection against brute force
+def login_view(request):
+    user = authenticate(username=username, password=password)
+    if user:
+        login(request, user)
+        return redirect('dashboard')
+    # Always returns same error, no lockout
+    messages.error(request, 'Invalid credentials')
+```
+
+**After (Mitigated - Rate Limiting with Lockout):**
+```python
+# SAFE: Rate limiting with 5-attempt lockout (15 minutes)
+def login_view(request):
+    # Check if locked out first
+    if is_locked_out(username):
+        messages.error(request, 'Account temporarily locked.')
+        return render(request, 'login.html', {'form': form})
+
+    user = authenticate(username=username, password=password)
+    if user:
+        login(request, user)
+        _reset_failed_attempts(username)  # Clear lockout on success
+        return redirect('dashboard')
+
+    _record_failed_attempt(username)  # Track failures
+    remaining = 5 - get_failure_count(username)
+    messages.error(request, f'Invalid credentials. ({remaining} attempts remaining)')
+```
+
+### Password Hashing (PBKDF2)
+
+**Before (Vulnerable - Plaintext Storage):**
+```python
+# VULNERABLE: Password stored in plaintext
+def create_user(username, password):
+    user = User(username=username, password=password)  # Plaintext!
+    user.save()
+```
+
+**After (Mitigated - PBKDF2 Default Django):**
+```python
+# SAFE: Django's set_password uses PBKDF2 by default
+def create_user(username, password):
+    user = User.objects.create_user(
+        username=username,
+        password=password  # Automatically hashed with PBKDF2
+    )
+    # Password field will be: pbkdf2_sha256$iterations$salt$hash
+```
+
+**Verification in Database:**
+```bash
+# Check password hash format in database
+sqlite3 db.sqlite3 "SELECT password FROM users WHERE username='admin';"
+# Result: pbkdf2_sha256$600000$salt$hash (not plaintext)
+```
+
+### Session Management
+
+**Before (Vulnerable - Session Fixation):**
+```python
+# VULNERABLE: Session ID not regenerated on login
+def login_view(request):
+    user = authenticate(username=username, password=password)
+    if user:
+        login(request, user)  # Session ID unchanged - vulnerable!
+```
+
+**After (Mitigated - Session Flush):**
+```python
+# SAFE: Session invalidated on logout
+def logout_view(request):
+    logout(request)  # Internally calls session.flush()
+    # Old session ID cannot be reused
+    return redirect('login')
+
+# Session configuration in settings.py:
+SESSION_COOKIE_HTTPONLY = True    # Prevent JavaScript access
+SESSION_COOKIE_SAMESITE = 'Lax'   # CSRF protection
+SESSION_COOKIE_AGE = 3600         # 1 hour expiration
+```
+
+### User Role Enforcement (@role_required)
+
+**Decorator Implementation:**
+```python
+def role_required(*roles):
+    """Decorator to restrict view access by user role."""
+    def decorator(view_func):
+        @wraps(view_func)
+        def wrapper(request, *args, **kwargs):
+            if not request.user.is_authenticated:
+                return redirect('main:login')
+            if request.user.role not in roles:
+                return HttpResponseForbidden('403 Forbidden')
+            return view_func(request, *args, **kwargs)
+        return wrapper
+    return decorator
+
+# Usage:
+@role_required('librarian')
+def add_book(request):
+    # Only librarians can access this view
+    ...
+```
 
 ---
 
 ## CWE References
 
-- **CWE-89**: SQL Injection
-- **CWE-79**: XSS (Code Injection)
-- **CWE-352**: CSRF
-- **CWE-287**: Broken Authentication
-- **CWE-307**: Brute Force
-- **CWE-256**: Plaintext Storage
-- **CWE-384**: Session Fixation
+| CWE | Name | Mitigation Implemented |
+|-----|------|------------------------|
+| **CWE-89** | SQL Injection | Django ORM Q objects, no raw SQL |
+| **CWE-79** | XSS (Code Injection) | Django auto-escape, allowlist validation |
+| **CWE-352** | CSRF | CsrfViewMiddleware, {% csrf_token %} in forms |
+| **CWE-287** | Broken Authentication | PBKDF2 hashing, session management |
+| **CWE-307** | Brute Force | Rate limiting (5 attempts = 15 min lockout) |
+| **CWE-256** | Plaintext Storage | Django's default PBKDF2 password hasher |
+| **CWE-384** | Session Fixation | session.flush() on logout, secure cookies |
