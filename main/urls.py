@@ -10,6 +10,9 @@ urlpatterns = [
     # Health check
     path('health/', views.health_check, name='health_check'),
 
+    # App admin (role: admin)
+    path('admin-panel/lockouts/', views.lockout_admin, name='lockout_admin'),
+
     # Auth (minimal — Kevin will enhance with rate limiting etc.)
     path('login/', auth_views.login_view, name='login'),
     path('logout/', auth_views.logout_view, name='logout'),

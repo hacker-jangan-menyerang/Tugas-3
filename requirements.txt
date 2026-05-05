@@ -1,3 +1,4 @@
 django
+django-axes
 python-dotenv
 psycopg2-binary

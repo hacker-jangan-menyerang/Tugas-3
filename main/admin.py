@@ -1,4 +1,6 @@
-from django.contrib import admin
+from django.contrib import admin, messages
+
+from axes.models import AccessAttempt
 from .models import User, Category, Book, BorrowTransaction, AuditLog
 
 
@@ -34,3 +36,24 @@ class AuditLogAdmin(admin.ModelAdmin):
     list_display = ('report_id', 'target_action', 'performed_by', 'generated_date')
     list_filter = ('generated_date',)
     search_fields = ('report_id', 'target_action', 'performed_by__username')
+
+
+try:
+    admin.site.unregister(AccessAttempt)
+except admin.sites.NotRegistered:
+    pass
+
+
+@admin.action(description='Clear selected IP lockouts')
+def clear_ip_lockouts(modeladmin, request, queryset):
+    ip_addresses = list(queryset.values_list('ip_address', flat=True).distinct())
+    AccessAttempt.objects.filter(ip_address__in=ip_addresses).delete()
+    messages.success(request, f'Cleared lockouts for {len(ip_addresses)} IP(s).')
+
+
+@admin.register(AccessAttempt)
+class AccessAttemptAdmin(admin.ModelAdmin):
+    list_display = ('ip_address', 'username', 'attempt_time', 'failures_since_start')
+    list_filter = ('ip_address', 'username')
+    search_fields = ('ip_address', 'username')
+    actions = [clear_ip_lockouts]

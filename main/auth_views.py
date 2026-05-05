@@ -17,84 +17,81 @@ Rate limiting implementation:
 """
 
 import datetime
-from typing import Any
+from typing import Any, Optional
 
+from django.conf import settings
 from django.shortcuts import render, redirect
 from django.contrib.auth import authenticate, login, logout
 from django.contrib import messages
 from django.views.decorators.http import require_http_methods
 from django.http import HttpResponseForbidden
-from django.core.cache import cache
 from django.utils import timezone
+
+from axes.models import AccessAttempt
+from axes.helpers import get_client_ip_address
 
 from .forms import LoginForm, RegisterForm
 
-FAILURE_LIMIT = 5
-LOCKOUT_DURATION = datetime.timedelta(minutes=15)
-
-def _get_attempts(key):
-    """Get attempt data from cache for a key."""
-    return cache.get(key, {'count': 0})
+def _get_axes_failure_limit() -> int:
+    """Return the configured Axes failure limit."""
+    return int(getattr(settings, 'AXES_FAILURE_LIMIT', 5))
 
 
-def _set_attempts(key, data):
-    """Persist attempt data in cache."""
-    cache.set(key, data, timeout=int(LOCKOUT_DURATION.total_seconds()))
+def _get_axes_cooloff_seconds() -> int:
+    """Return Axes cooloff time in seconds."""
+    cooloff = getattr(settings, 'AXES_COOLOFF_TIME', datetime.timedelta(minutes=15))
+    if isinstance(cooloff, datetime.timedelta):
+        return int(cooloff.total_seconds())
+    return int(datetime.timedelta(hours=float(cooloff)).total_seconds())
 
 
-def _make_key(ip, username):
-    """Create a composite key for IP + username tracking."""
-    return f"{ip}:{username}"
+def _get_client_ip(request) -> str:
+    """Get client IP address for Axes tracking."""
+    client_ip = get_client_ip_address(request)
+    if isinstance(client_ip, tuple):
+        return client_ip[0]
+    return client_ip or 'unknown'
 
 
-def _get_client_ip(request):
-    """Get client IP address for rate limiting."""
-    x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
-    if x_forwarded_for:
-        return x_forwarded_for.split(',')[0].strip()
-    return request.META.get('REMOTE_ADDR', 'unknown')
+def _get_latest_attempt(ip: str, username: Optional[str]) -> Optional[AccessAttempt]:
+    """Get latest AccessAttempt for an IP."""
+    return AccessAttempt.objects.filter(ip_address=ip).order_by('-attempt_time').first()
 
 
-def _is_locked_out(ip, username):
-    """Check if IP+username combination is locked out due to too many failed attempts."""
-    key = _make_key(ip, username)
-    data = _get_attempts(key)
-    lockout_until = data.get('lockout_until')
-    if lockout_until and timezone.now() < lockout_until:
-        return True
+def _is_locked_out(ip: str, username: Optional[str]) -> bool:
+    """Check Axes lockout status using AccessAttempt state."""
+    attempt = _get_latest_attempt(ip, username)
+    if not attempt:
+        return False
 
-    if lockout_until:
-        cache.delete(key)
-    return False
+    failures = int(getattr(attempt, 'failures_since_start', 0) or 0)
+    if failures < _get_axes_failure_limit():
+        return False
 
-
-def _get_lockout_remaining_seconds(ip, username):
-    """Return remaining lockout time in seconds for a key."""
-    key = _make_key(ip, username)
-    data = _get_attempts(key)
-    lockout_until = data.get('lockout_until')
-    if lockout_until and timezone.now() < lockout_until:
-        return max(0, int((lockout_until - timezone.now()).total_seconds()))
-    return 0
+    remaining = _get_lockout_remaining_seconds(ip, username)
+    return remaining > 0
 
 
-def _record_failed_attempt(username, ip):
-    """Record a failed login attempt."""
-    key = _make_key(ip, username)
-    data = _get_attempts(key)
-    data['count'] = data.get('count', 0) + 1
+def _get_lockout_remaining_seconds(ip: str, username: Optional[str]) -> int:
+    """Return remaining lockout time in seconds based on Axes attempts."""
+    attempt = _get_latest_attempt(ip, username)
+    if not attempt:
+        return 0
 
-    if data['count'] >= FAILURE_LIMIT:
-        data['lockout_until'] = timezone.now() + LOCKOUT_DURATION
+    last_attempt = getattr(attempt, 'last_attempt_time', None) or getattr(attempt, 'attempt_time', None)
+    if not last_attempt:
+        return 0
 
-    _set_attempts(key, data)
-    return data
+    cooloff_seconds = _get_axes_cooloff_seconds()
+    elapsed = (timezone.now() - last_attempt).total_seconds()
+    return max(0, int(cooloff_seconds - elapsed))
 
 
-def _record_success(username, ip):
-    """Reset failed attempts on successful login."""
-    key = _make_key(ip, username)
-    cache.delete(key)
+def _get_remaining_attempts(ip: str, username: Optional[str]) -> int:
+    """Return remaining attempts before Axes lockout."""
+    attempt = _get_latest_attempt(ip, username)
+    failures = int(getattr(attempt, 'failures_since_start', 0) or 0) if attempt else 0
+    return max(0, _get_axes_failure_limit() - failures)
 
 
 @require_http_methods(["GET", "POST"])
@@ -116,6 +113,9 @@ def login_view(request):
 
     form = LoginForm()
     context: dict[str, Any] = {'form': form}
+    lockout_seconds = request.session.pop('lockout_seconds', None)
+    if lockout_seconds:
+        context['lockout_seconds'] = lockout_seconds
 
     if request.method == 'POST':
         form = LoginForm(request.POST)
@@ -130,29 +130,27 @@ def login_view(request):
                 remaining_seconds = _get_lockout_remaining_seconds(ip, username)
                 remaining_minutes = max(1, int(remaining_seconds / 60))
                 messages.error(request, f'Account temporarily locked due to too many failed attempts. Try again in {remaining_minutes} minutes.')
-                context['lockout_seconds'] = remaining_seconds
-                return render(request, 'main/login.html', context)
+                request.session['lockout_seconds'] = remaining_seconds
+                return redirect('main:login')
 
             user = authenticate(request, username=username, password=password)
 
             if user is not None:
                 if user.is_active:
                     login(request, user)
-                    _record_success(username, ip)
                     return _redirect_by_role(user)
                 else:
-                    data = _record_failed_attempt(username, ip)
                     messages.error(request, 'Invalid username or password.')
             else:
-                data = _record_failed_attempt(username, ip)
-                if data.get('lockout_until') and _is_locked_out(ip, username):
+                if _is_locked_out(ip, username) or getattr(request, 'axes_locked_out', False):
                     remaining_seconds = _get_lockout_remaining_seconds(ip, username)
                     remaining_minutes = max(1, int(remaining_seconds / 60))
                     messages.error(request, f'Account temporarily locked due to too many failed attempts. Try again in {remaining_minutes} minutes.')
-                    context['lockout_seconds'] = remaining_seconds
+                    request.session['lockout_seconds'] = remaining_seconds
                 else:
-                    remaining = max(0, FAILURE_LIMIT - data.get('count', 0))
+                    remaining = _get_remaining_attempts(ip, username)
                     messages.error(request, f'Invalid username or password. ({remaining} attempts remaining)')
+                return redirect('main:login')
 
     return render(request, 'main/login.html', context)
 

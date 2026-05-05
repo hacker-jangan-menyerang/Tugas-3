@@ -2,6 +2,7 @@
 Django settings for elibrary project.
 """
 
+import datetime
 from pathlib import Path
 from dotenv import load_dotenv
 import os
@@ -23,6 +24,7 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+    'axes',
     'main',
 ]
 
@@ -90,10 +92,21 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 AUTH_USER_MODEL = 'main.User'
 
+AUTHENTICATION_BACKENDS = [
+    'axes.backends.AxesBackend',
+    'django.contrib.auth.backends.ModelBackend',
+]
+
 # Authentication URLs
 LOGIN_URL = '/login/'
 LOGIN_REDIRECT_URL = '/member/'
 LOGOUT_REDIRECT_URL = '/login/'
+
+# Axes rate limiting
+AXES_FAILURE_LIMIT = 5
+AXES_COOLOFF_TIME = datetime.timedelta(minutes=15)
+AXES_RESET_ON_SUCCESS = True
+AXES_LOCKOUT_PARAMETERS = ['ip_address']
 
 # Session security settings
 SESSION_COOKIE_HTTPONLY = True      # Prevent JavaScript access to session cookie
