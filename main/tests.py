@@ -233,12 +233,9 @@ class CSRFProtectionTests(TestCase):
         Simulates an attacker's cross-site form that lacks CSRF token.
         Django's CsrfViewMiddleware must reject this request.
         """
-        # Login first
-        self.client.login(username='csrfmember', password='testpass123')
-
         # POST without CSRF token (enforce_csrf_checks=True)
         csrf_client = Client(enforce_csrf_checks=True)
-        csrf_client.login(username='csrfmember', password='testpass123')
+        csrf_client.force_login(self.member)
 
         response = csrf_client.post(
             f'/member/borrow/{self.book.id}/',
@@ -256,7 +253,7 @@ class CSRFProtectionTests(TestCase):
         the request must be rejected.
         """
         csrf_client = Client(enforce_csrf_checks=True)
-        csrf_client.login(username='csrfmember', password='testpass123')
+        csrf_client.force_login(self.member)
 
         response = csrf_client.post(
             f'/member/borrow/{self.book.id}/',
@@ -274,7 +271,7 @@ class CSRFProtectionTests(TestCase):
         then POST with the valid token.
         """
         csrf_client = Client(enforce_csrf_checks=True)
-        csrf_client.login(username='csrfmember', password='testpass123')
+        csrf_client.force_login(self.member)
 
         # GET the borrow page first (sets CSRF cookie)
         get_response = csrf_client.get(f'/member/borrow/{self.book.id}/')
@@ -318,7 +315,7 @@ class CSRFProtectionTests(TestCase):
         )
 
         csrf_client = Client(enforce_csrf_checks=True)
-        csrf_client.login(username='csrfmember', password='testpass123')
+        csrf_client.force_login(self.member)
 
         # POST without CSRF token
         response = csrf_client.post(f'/member/return/{tx.id}/', {})
@@ -375,7 +372,7 @@ class IDORPreventionTests(TestCase):
         The return view filters by borrower=request.user,
         so Member A will get 404 (transaction not found for them).
         """
-        self.client.login(username='member_a', password='testpass123')
+        self.client.force_login(self.member_a)
 
         # Member A tries to return Member B's transaction
         response = self.client.post(f'/member/return/{self.tx_b.id}/')
@@ -389,7 +386,7 @@ class IDORPreventionTests(TestCase):
         Verify borrow history only shows the logged-in user's transactions.
         Member A should NOT see Member B's transaction.
         """
-        self.client.login(username='member_a', password='testpass123')
+        self.client.force_login(self.member_a)
 
         response = self.client.get('/member/history/')
         self.assertEqual(response.status_code, 200)
@@ -431,7 +428,7 @@ class BorrowReturnFlowTests(TestCase):
         """
         TC-BORROW-01: Borrow available book → status becomes 'not_available'.
         """
-        self.client.login(username='flowmember', password='testpass123')
+        self.client.force_login(self.member)
 
         response = self.client.post(f'/member/borrow/{self.book.id}/')
         self.assertEqual(response.status_code, 302)  # Redirect on success
@@ -449,7 +446,7 @@ class BorrowReturnFlowTests(TestCase):
         from django.utils import timezone
         from datetime import timedelta
 
-        self.client.login(username='flowmember', password='testpass123')
+        self.client.force_login(self.member)
 
         # Create a borrow transaction
         tx = BorrowTransaction.objects.create(
@@ -484,7 +481,7 @@ class BorrowReturnFlowTests(TestCase):
         from main.models import BorrowTransaction
         from django.utils import timezone
 
-        self.client.login(username='flowmember', password='testpass123')
+        self.client.force_login(self.member)
 
         before = timezone.now()
         self.client.post(f'/member/borrow/{self.book.id}/')
@@ -508,7 +505,7 @@ class BorrowReturnFlowTests(TestCase):
         """
         from main.models import BorrowTransaction
 
-        self.client.login(username='flowmember', password='testpass123')
+        self.client.force_login(self.member)
         self.client.post(f'/member/borrow/{self.book.id}/')
 
         tx = BorrowTransaction.objects.filter(
@@ -541,14 +538,14 @@ class RoleAccessTests(TestCase):
 
     def test_librarian_cannot_access_member_dashboard(self):
         """Librarian accessing member dashboard → 403 Forbidden."""
-        self.client.login(username='rolelibrarian', password='testpass123')
+        self.client.force_login(self.librarian)
         response = self.client.get('/member/')
         self.assertEqual(response.status_code, 403,
             "Librarian should not access member dashboard (least privilege)")
 
     def test_member_can_access_member_dashboard(self):
         """Member accessing member dashboard → 200 OK."""
-        self.client.login(username='rolemember', password='testpass123')
+        self.client.force_login(self.member)
         response = self.client.get('/member/')
         self.assertEqual(response.status_code, 200)
 

@@ -280,6 +280,178 @@ def add_book(request):
 
 ---
 
+## CSRF Protection & Member Features (Benedictus Lucky Win Ziraluo)
+
+### Overview
+
+Implementasi CSRF (Cross-Site Request Forgery) protection pada seluruh fitur member, serta pencegahan IDOR (Insecure Direct Object Reference) pada akses data transaksi.
+
+**Vulnerability yang dimitigasi:**
+- **CWE-352** (Cross-Site Request Forgery): Attacker membuat form di situs lain yang mengirim POST request ke aplikasi atas nama user yang sedang login
+- **CWE-639** (Insecure Direct Object Reference): User mengakses data milik user lain dengan memanipulasi ID di URL
+- **Repudiation**: User memanipulasi timestamp transaksi untuk menyangkal aktivitas
+
+### 1. CSRF Token pada Semua Form POST
+
+**Before (Vulnerable — Tanpa CSRF Token):**
+```html
+<!-- VULNERABLE: Form tanpa CSRF token -->
+<!-- Attacker bisa buat form ini di situs lain dan submit atas nama korban -->
+<form method="post" action="/member/borrow/1/">
+    <button type="submit">Borrow Book</button>
+</form>
+```
+
+**After (Secure — Dengan CSRF Token):**
+```html
+<!-- SECURE: Django generates unique token per session -->
+<!-- CsrfViewMiddleware verifies token sebelum proses request -->
+<form method="post" action="/member/borrow/1/">
+    {% csrf_token %}
+    <!-- Renders: <input type="hidden" name="csrfmiddlewaretoken" value="unique-token"> -->
+    <button type="submit">Borrow Book</button>
+</form>
+```
+
+**Konfigurasi di `settings.py`:**
+```python
+MIDDLEWARE = [
+    ...
+    'django.middleware.csrf.CsrfViewMiddleware',  # Aktif — verifikasi setiap POST
+    ...
+]
+```
+
+**Tidak ada `@csrf_exempt` di seluruh project** — semua endpoint POST dilindungi CSRF.
+
+### 2. IDOR Prevention pada Borrow History & Return
+
+**Before (Vulnerable — Tanpa Ownership Check):**
+```python
+# VULNERABLE: User bisa akses transaksi milik user lain
+def return_book(request, transaction_id):
+    transaction = get_object_or_404(BorrowTransaction, id=transaction_id)
+    # Siapapun yang tahu ID bisa return buku orang lain!
+    transaction.status = 'returned'
+    transaction.save()
+
+def borrow_history(request, user_id):
+    # VULNERABLE: URL pakai user_id → Member A bisa lihat history Member B
+    transactions = BorrowTransaction.objects.filter(borrower_id=user_id)
+```
+
+**After (Secure — Ownership Check):**
+```python
+# SECURE: Filter by request.user → hanya bisa akses data sendiri
+def return_book(request, transaction_id):
+    # Ownership check: hanya borrower yang bisa return
+    transaction = get_object_or_404(
+        BorrowTransaction,
+        id=transaction_id,
+        borrower=request.user  # CRITICAL: cegah IDOR
+    )
+    transaction.return_date = timezone.now()  # Server-side timestamp
+    transaction.status = 'returned'
+    transaction.save()
+
+def borrow_history(request):
+    # SECURE: Tidak ada user_id di URL, selalu pakai request.user
+    transactions = BorrowTransaction.objects.filter(
+        borrower=request.user  # Ownership check
+    )
+```
+
+### 3. Server-side Timestamping (Repudiation Mitigation)
+
+```python
+# Semua timestamp diisi oleh SERVER, bukan input user
+BorrowTransaction.objects.create(
+    book=book,
+    borrower=request.user,
+    membership_number=request.user.membership_number,  # Auto dari profil
+    due_date=timezone.now() + timedelta(days=14),       # Server hitung
+    status='borrowed'
+    # borrow_date: auto_now_add=True → diisi Django saat create
+)
+
+# Return: timestamp juga dari server
+transaction.return_date = timezone.now()  # Bukan dari request.POST
+```
+
+### Fitur Member yang Diimplementasi
+
+| Fitur | URL | Method | CSRF | IDOR Check |
+|-------|-----|--------|------|------------|
+| Member Dashboard | `/member/` | GET | — | `@role_required('member')` |
+| Borrow eBook | `/member/borrow/<id>/` | GET, POST | ✅ `{% csrf_token %}` | Book availability check |
+| Return eBook | `/member/return/<id>/` | GET, POST | ✅ `{% csrf_token %}` | ✅ `borrower=request.user` |
+| Borrow History | `/member/history/` | GET | — | ✅ `borrower=request.user` |
+| Read Online | `/member/read/<id>/` | GET | — | ✅ Active borrow check |
+
+### Test Cases
+
+| TC | Description | Expected | Status |
+|----|-------------|----------|--------|
+| **TC-CSRF-01** | POST `/member/borrow/<id>/` tanpa CSRF token | 403 Forbidden | ✅ Pass |
+| **TC-CSRF-02** | POST dengan CSRF token salah/invalid | 403 Forbidden | ✅ Pass |
+| **TC-CSRF-03** | POST dengan CSRF token valid | Borrow berhasil (302 redirect) | ✅ Pass |
+| **TC-CSRF-04** | POST `/member/return/<id>/` tanpa CSRF token | 403 Forbidden | ✅ Pass |
+| **TC-IDOR-01** | Member A coba return buku Member B | 404 Not Found | ✅ Pass |
+| **TC-IDOR-02** | Borrow history hanya tampilkan transaksi sendiri | Member A tidak lihat data Member B | ✅ Pass |
+| **TC-BORROW-01** | Borrow buku available | Book status → `not_available` | ✅ Pass |
+| **TC-RETURN-01** | Return buku borrowed | Book status → `available`, return_date terisi | ✅ Pass |
+| **TC-TIMESTAMP-01** | Verifikasi borrow_date dari server | Timestamp antara before/after request | ✅ Pass |
+| **TC-ROLE-01** | Unauthenticated akses `/member/` | Redirect ke login | ✅ Pass |
+| **TC-ROLE-02** | Librarian akses `/member/` | 403 Forbidden | ✅ Pass |
+
+### Running Tests
+
+```bash
+python manage.py test main.tests -v 2
+```
+
+### Screenshot Aplikasi
+
+#### Member Dashboard
+<!-- TODO: Tambahkan screenshot member dashboard -->
+> 📸 `[Screenshot: Member Dashboard — tampilan grid buku dengan tombol Borrow/Read]`
+
+#### Borrow Confirmation
+<!-- TODO: Tambahkan screenshot halaman konfirmasi borrow -->
+> 📸 `[Screenshot: Borrow Confirm — form dengan CSRF token visible di view source]`
+
+#### Borrow History
+<!-- TODO: Tambahkan screenshot borrow history -->
+> 📸 `[Screenshot: Borrow History — tabel riwayat peminjaman milik member]`
+
+#### Return Confirmation
+<!-- TODO: Tambahkan screenshot halaman return -->
+> 📸 `[Screenshot: Return Confirm — form POST dengan CSRF token]`
+
+#### Read Online
+<!-- TODO: Tambahkan screenshot halaman read online -->
+> 📸 `[Screenshot: Read Online — halaman baca buku]`
+
+### Screenshot Hasil Test Case
+
+#### TC-CSRF-01: POST tanpa CSRF Token → 403
+<!-- TODO: Tambahkan screenshot curl/Postman POST tanpa token → 403 -->
+> 📸 `[Screenshot: curl -X POST /member/borrow/1/ tanpa CSRF token → 403 Forbidden]`
+
+#### TC-CSRF-03: POST dengan CSRF Token Valid → Sukses
+<!-- TODO: Tambahkan screenshot borrow berhasil -->
+> 📸 `[Screenshot: Borrow berhasil dengan CSRF token valid → redirect ke history]`
+
+#### TC-IDOR-01: Member A Return Buku Member B → 404
+<!-- TODO: Tambahkan screenshot IDOR test -->
+> 📸 `[Screenshot: Member A coba return buku Member B → 404 Not Found]`
+
+#### TC-CSRF & TC-IDOR Test Output
+<!-- TODO: Tambahkan screenshot output python manage.py test -->
+> 📸 `[Screenshot: Output terminal — semua TC-CSRF dan TC-IDOR pass]`
+
+---
+
 ## CWE References
 
 | CWE | Name | Mitigation Implemented |
@@ -291,3 +463,4 @@ def add_book(request):
 | **CWE-307** | Brute Force | Rate limiting (5 attempts = 15 min lockout) |
 | **CWE-256** | Plaintext Storage | Django's default PBKDF2 password hasher |
 | **CWE-384** | Session Fixation | session.flush() on logout, secure cookies |
+| **CWE-639** | IDOR (Insecure Direct Object Reference) | Ownership check `borrower=request.user` pada return & history |
