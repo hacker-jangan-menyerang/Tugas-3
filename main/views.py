@@ -12,6 +12,7 @@ from axes.models import AccessAttempt
 
 from .decorators import role_required
 from .models import Book, BorrowTransaction, Category
+from .audit import create_audit_log
 
 
 def landing(request):
@@ -82,6 +83,11 @@ def lockout_admin(request):
         ip_address = request.POST.get('ip_address', '').strip()
         if ip_address:
             deleted, _ = AccessAttempt.objects.filter(ip_address=ip_address).delete()
+            create_audit_log(
+                'lockout_cleared',
+                request.user,
+                f'Cleared {deleted} lockout records for IP {ip_address}.',
+            )
             messages.success(request, f'Cleared lockout records for {ip_address}.')
         else:
             messages.error(request, 'Missing IP address to clear.')

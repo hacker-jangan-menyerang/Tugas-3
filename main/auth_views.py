@@ -31,6 +31,7 @@ from axes.models import AccessAttempt
 from axes.helpers import get_client_ip_address
 
 from .forms import LoginForm, RegisterForm
+from .audit import create_audit_log
 
 def _get_axes_failure_limit() -> int:
     """Return the configured Axes failure limit."""
@@ -192,6 +193,12 @@ def register_view(request):
                 role=role,
                 employee_id=employee_id or None,
                 membership_number=membership_number or None
+            )
+
+            create_audit_log(
+                'user_registered',
+                user,
+                f'Self-registration: {user.username} with role {user.role}.',
             )
 
             messages.success(request, f'Account created for {username}! Please log in.')

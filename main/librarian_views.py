@@ -402,6 +402,12 @@ def generate_report(request):
     total_borrowed = BorrowTransaction.objects.filter(status='borrowed').count()
     total_returned = BorrowTransaction.objects.filter(status='returned').count()
 
+    create_audit_log(
+        'report_generated',
+        request.user,
+        f'Generated borrow report (status_filter={status_filter or "all"}).',
+    )
+
     return render(request, 'main/librarian_report.html', {
         'page_obj': page_obj,
         'status_filter': status_filter,

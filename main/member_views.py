@@ -35,6 +35,7 @@ from datetime import timedelta
 
 from .models import Book, BorrowTransaction
 from .decorators import role_required
+from .audit import create_audit_log
 
 
 @role_required('member')
@@ -104,7 +105,7 @@ def borrow_book(request, book_id):
         # Create transaction with server-side timestamps
         # borrow_date: auto_now_add=True (server timestamp, not user input)
         # due_date: server calculates now + 14 days
-        BorrowTransaction.objects.create(
+        transaction = BorrowTransaction.objects.create(
             book=book,
             borrower=request.user,
             membership_number=request.user.membership_number,  # AccountabilityMemberTracked
@@ -115,6 +116,12 @@ def borrow_book(request, book_id):
         # Update book status (OCL: Book.status = 'Not Available')
         book.status = 'not_available'
         book.save(update_fields=['status'])
+
+        create_audit_log(
+            'book_borrowed',
+            request.user,
+            f'Borrowed "{book.title}" (book_id={book.id}, txn={transaction.id}).',
+        )
 
         messages.success(request, f'Successfully borrowed "{book.title}".')
         return redirect('main:borrow_history')
@@ -163,6 +170,12 @@ def return_book(request, transaction_id):
         # Update book status back to available
         transaction.book.status = 'available'
         transaction.book.save(update_fields=['status'])
+
+        create_audit_log(
+            'book_returned',
+            request.user,
+            f'Returned "{transaction.book.title}" (book_id={transaction.book.id}, txn={transaction.id}).',
+        )
 
         messages.success(request, f'Successfully returned "{transaction.book.title}".')
         return redirect('main:borrow_history')
@@ -215,5 +228,11 @@ def read_online(request, book_id):
     if not has_access:
         messages.error(request, 'You need to borrow this book first to read it online.')
         return redirect('main:member_dashboard')
+
+    create_audit_log(
+        'book_read_online',
+        request.user,
+        f'Opened online reader for "{book.title}" (book_id={book.id}).',
+    )
 
     return render(request, 'main/read_online.html', {'book': book})
