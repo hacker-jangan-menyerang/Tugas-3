@@ -9,6 +9,7 @@ from . import librarian_views
 app_name = 'main'
 
 urlpatterns = [
+    path('', views.landing, name='landing'),
     # Health check
     path('health/', views.health_check, name='health_check'),
 

@@ -11,6 +11,22 @@ from django.views.decorators.http import require_http_methods
 from axes.models import AccessAttempt
 
 from .decorators import role_required
+from .models import Book, BorrowTransaction, Category
+
+
+def landing(request):
+    stats = {
+        'total_books': Book.objects.filter(is_deleted=False).count(),
+        'total_available': Book.objects.filter(
+            is_deleted=False,
+            status=Book.Status.AVAILABLE
+        ).count(),
+        'total_categories': Category.objects.count(),
+        'total_active_borrows': BorrowTransaction.objects.filter(
+            status=BorrowTransaction.Status.BORROWED
+        ).count(),
+    }
+    return render(request, 'main/landing.html', stats)
 
 
 def health_check(request):

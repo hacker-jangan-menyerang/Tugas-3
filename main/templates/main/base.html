@@ -6,76 +6,61 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}Digital Library{% endblock %}</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <script>
-        tailwind.config = {
-            theme: {
-                extend: {
-                    colors: {
-                        primary: '#0f172a',
-                        accent: '#8b0000',
-                        blood: '#8b0000',
-                        'blood-bright': '#a01010',
-                        'blood-light': '#fdf2f2',
-                    },
-                    fontFamily: {
-                        heading: ['Montserrat', 'sans-serif'],
-                        body: ['Inter', 'sans-serif'],
-                    }
-                }
-            }
-        }
-    </script>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Montserrat:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <style>
-        * { font-family: 'Inter', sans-serif; }
-        h1, h2, h3, h4, h5, h6 { font-family: 'Montserrat', sans-serif; }
-        ::selection { background: #8b0000; color: white; }
-    </style>
+    <link rel="stylesheet" href="{% static 'css/style.css' %}">
 </head>
-<body class="bg-white text-slate-800 min-h-screen flex flex-col">
+<body class="app-shell bg-white text-slate-800 min-h-screen flex flex-col">
+    <a class="skip-link" href="#main-content">Skip to content</a>
     <!-- Header -->
-    <header class="bg-slate-900 text-white shadow-lg">
-        <div class="max-w-6xl mx-auto px-6 py-4">
-            <div class="flex items-center justify-between">
-                <h1 class="text-2xl font-bold tracking-tight">
-                    <span class="text-red-700">⛓️</span> Digital Library
-                </h1>
-                <nav class="flex items-center gap-6">
-                    <a href="{% url 'main:book_list' %}" class="text-slate-300 hover:text-white transition-colors">All Books</a>
-                    <a href="{% url 'main:search_books' %}" class="text-slate-300 hover:text-white transition-colors">Search</a>
-                    {% if user.is_authenticated %}
-                        {% if user.role == 'member' %}
-                            <a href="{% url 'main:member_dashboard' %}" class="text-slate-300 hover:text-white transition-colors">Dashboard</a>
-                            <a href="{% url 'main:borrow_history' %}" class="text-slate-300 hover:text-white transition-colors">My History</a>
-                        {% elif user.role == 'librarian' %}
-                            <a href="{% url 'main:librarian_dashboard' %}" class="text-slate-300 hover:text-white transition-colors">Dashboard</a>
-                            <a href="{% url 'main:book_management_list' %}" class="text-slate-300 hover:text-white transition-colors">Books</a>
-                            <a href="{% url 'main:category_list' %}" class="text-slate-300 hover:text-white transition-colors">Categories</a>
-                            <a href="{% url 'main:generate_report' %}" class="text-slate-300 hover:text-white transition-colors">Report</a>
-                        {% elif user.role == 'admin' %}
-                            <a href="{% url 'main:admin_dashboard' %}" class="text-slate-300 hover:text-white transition-colors">Dashboard</a>
-                            <a href="{% url 'main:lockout_admin' %}" class="text-slate-300 hover:text-white transition-colors">Admin Panel</a>
-                        {% endif %}
-                        <span class="text-slate-400 text-sm">{{ user.username }} ({{ user.get_role_display }})</span>
-                        <a href="{% url 'main:logout' %}" class="text-red-400 hover:text-red-300 transition-colors text-sm font-medium">Logout</a>
-                    {% else %}
-                        <a href="{% url 'main:login' %}" class="px-4 py-1.5 bg-red-800 text-white text-sm font-medium rounded-lg hover:bg-red-900 transition-colors">Login</a>
+    <header class="site-header">
+        <div class="container-custom header-row">
+            <a href="{% url 'main:landing' %}" class="brand-link">
+                <span class="brand-mark" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" class="w-4 h-4 text-white" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M12 2L12 16M12 16L8 12M12 16L16 12" stroke-linecap="round" stroke-linejoin="round"></path>
+                        <circle cx="12" cy="19" r="1"></circle>
+                    </svg>
+                </span>
+                <span class="brand-text">
+                    <span class="brand-title">하자메</span>
+                    <span class="brand-sub">Hajame eLibrary</span>
+                </span>
+            </a>
+            <nav class="site-nav">
+                <a href="{% url 'main:landing' %}" class="nav-link">Home</a>
+                <a href="{% url 'main:book_list' %}" class="nav-link">Books</a>
+                <a href="{% url 'main:search_books' %}" class="nav-link">Search</a>
+                {% if user.is_authenticated %}
+                    {% if user.role == 'member' %}
+                        <a href="{% url 'main:member_dashboard' %}" class="nav-link">Dashboard</a>
+                        <a href="{% url 'main:borrow_history' %}" class="nav-link">My History</a>
+                    {% elif user.role == 'librarian' %}
+                        <a href="{% url 'main:librarian_dashboard' %}" class="nav-link">Dashboard</a>
+                        <a href="{% url 'main:book_management_list' %}" class="nav-link">Books</a>
+                        <a href="{% url 'main:category_list' %}" class="nav-link">Categories</a>
+                        <a href="{% url 'main:generate_report' %}" class="nav-link">Report</a>
+                    {% elif user.role == 'admin' %}
+                        <a href="{% url 'main:admin_dashboard' %}" class="nav-link">Dashboard</a>
+                        <a href="{% url 'main:lockout_admin' %}" class="nav-link">Admin Panel</a>
                     {% endif %}
-                </nav>
-            </div>
+                    <span class="nav-meta">{{ user.username }} ({{ user.get_role_display }})</span>
+                    <a href="{% url 'main:logout' %}" class="nav-link nav-ghost">Logout</a>
+                {% else %}
+                    <a href="{% url 'main:login' %}" class="nav-cta">Login</a>
+                {% endif %}
+            </nav>
         </div>
     </header>
 
     <!-- Main Content -->
-    <main class="flex-1 py-8 px-6">
-        <div class="max-w-6xl mx-auto">
+    <main id="main-content" class="site-main flex-1">
+        <div class="container-custom">
             {% block content %}{% endblock %}
         </div>
     </main>
 
     <!-- Footer -->
-    <footer class="bg-slate-100 border-t border-slate-200 py-6 px-6">
-        <div class="max-w-6xl mx-auto text-center text-slate-500 text-sm">
+    <footer class="site-footer">
+        <div class="container-custom text-center text-sm">
             <p>Digital Library Management System | hacker-jangan-menyerang</p>
         </div>
     </footer>

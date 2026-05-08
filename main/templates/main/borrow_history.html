@@ -75,12 +75,12 @@
                                     {% if tx.status == 'borrowed' %}
                                         <div class="flex gap-2">
                                             <a href="{% url 'main:return_book' tx.id %}"
-                                               class="px-3 py-1.5 bg-green-700 text-white text-xs font-medium rounded-lg hover:bg-green-800 transition-colors"
+                                                              class="px-3 py-1.5 bg-red-800 text-white text-xs font-medium rounded-lg hover:bg-red-900 transition-colors"
                                                id="return-btn-{{ tx.id }}">
                                                 Return
                                             </a>
                                             <a href="{% url 'main:read_online' tx.book.id %}"
-                                               class="px-3 py-1.5 bg-blue-600 text-white text-xs font-medium rounded-lg hover:bg-blue-700 transition-colors"
+                                                              class="px-3 py-1.5 bg-slate-900 text-white text-xs font-medium rounded-lg hover:bg-slate-800 transition-colors"
                                                id="read-btn-{{ tx.id }}">
                                                 Read
                                             </a>

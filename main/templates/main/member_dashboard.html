@@ -99,7 +99,7 @@
                         {% else %}
                             {% if book.id in active_borrows %}
                                 <a href="{% url 'main:read_online' book.id %}"
-                                   class="flex-1 text-center px-4 py-2 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 transition-colors"
+                                              class="flex-1 text-center px-4 py-2 bg-slate-900 text-white font-medium rounded-lg hover:bg-slate-800 transition-colors"
                                    id="read-btn-{{ book.id }}">
                                     📖 Read Online
                                 </a>
