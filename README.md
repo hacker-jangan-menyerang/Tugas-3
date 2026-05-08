@@ -1,8 +1,6 @@
 # Digital Library Management System
 
 **Kelompok: hacker-jangan-menyerang**
-**Repo: PKPL26_68_hacker-jangan-menyerang**
-**Mata Kuliah: Pengantar Keamanan Perangkat Lunak — Universitas Indonesia, Genap 2025/2026**
 
 ---
 
@@ -493,8 +491,8 @@ python manage.py test main.tests --verbosity=2
 
 ```bash
 # 1. Clone repository
-git clone https://github.com/UI-FASILKOM-OS/PKPL26_68_hacker-jangan-menyerang.git
-cd PKPL26_68_hacker-jangan-menyerang
+git clone https://github.com/hacker-jangan-menyerang/Tugas-3.git
+cd Tugas-3
 
 # 2. Buat virtual environment
 python -m venv venv
