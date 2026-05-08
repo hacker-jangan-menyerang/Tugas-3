@@ -52,6 +52,7 @@ urlpatterns = [
     path('admin-panel/users/', admin_views.user_list, name='user_list'),
     path('admin-panel/users/create/', admin_views.user_create, name='user_create'),
     path('admin-panel/users/<int:user_id>/', admin_views.user_detail, name='user_detail'),
+    path('admin-panel/users/<int:user_id>/edit/', admin_views.user_edit, name='user_edit'),
     path('admin-panel/users/<int:user_id>/toggle/', admin_views.user_toggle_active, name='user_toggle_active'),
     path('admin-panel/users/<int:user_id>/role/', admin_views.user_change_role, name='user_change_role'),
 

@@ -15,7 +15,7 @@ from django.core.paginator import Paginator
 from django.shortcuts import render, redirect, get_object_or_404
 from django.views.decorators.http import require_http_methods, require_POST
 
-from .admin_forms import AdminUserCreateForm
+from .admin_forms import AdminUserCreateForm, AdminUserEditForm
 from .audit import create_audit_log
 from .decorators import role_required
 from .models import AuditLog, Book, BorrowTransaction, User
@@ -170,6 +170,61 @@ def user_detail(request, user_id):
         'user_logs': user_logs,
         'role_choices': User.Role.choices,
         'is_self': target_user.id == request.user.id,
+    })
+
+
+@role_required('admin')
+@require_http_methods(["GET", "POST"])
+def user_edit(request, user_id):
+    """
+    Edit an existing user's profile (no password change here).
+
+    Security:
+    - @role_required('admin') restricts access to admins.
+    - CSRF protection in template for POST.
+    - Self cannot demote own role to non-admin.
+    - Audit logging records before/after role and updated username.
+    """
+    target_user = get_object_or_404(User, id=user_id)
+    is_self = target_user.id == request.user.id
+
+    if request.method == 'POST':
+        form = AdminUserEditForm(request.POST, user_instance=target_user)
+        if form.is_valid():
+            new_role = form.cleaned_data['role']
+            if is_self and new_role != 'admin':
+                messages.error(request, 'You cannot change your own role to non-admin.')
+                return redirect('main:user_edit', user_id=target_user.id)
+
+            old_username = target_user.username
+            old_role = target_user.role
+
+            target_user.username = form.cleaned_data['username']
+            target_user.email = form.cleaned_data['email']
+            target_user.role = new_role
+            target_user.employee_id = form.cleaned_data.get('employee_id') or None
+            target_user.membership_number = form.cleaned_data.get('membership_number') or None
+            target_user.save(update_fields=[
+                'username', 'email', 'role', 'employee_id', 'membership_number',
+            ])
+
+            create_audit_log(
+                'user_edited',
+                request.user,
+                (
+                    f'Edited user {old_username} (id={target_user.id}); '
+                    f'role {old_role}->{target_user.role}.'
+                ),
+            )
+            messages.success(request, f'User {target_user.username} updated successfully.')
+            return redirect('main:user_detail', user_id=target_user.id)
+    else:
+        form = AdminUserEditForm(user_instance=target_user)
+
+    return render(request, 'main/admin_user_form.html', {
+        'form': form,
+        'form_title': f'Edit User: {target_user.username}',
+        'submit_label': 'Save Changes',
     })
 
 
