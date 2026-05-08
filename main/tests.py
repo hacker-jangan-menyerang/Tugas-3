@@ -1291,3 +1291,160 @@ class LibrarianRBACTests(TestCase):
         response = self.client.get('/librarian/')
         self.assertEqual(response.status_code, 302)
         self.assertIn('/login/', response.url)
+
+class AdminFeatureTests(TestCase):
+    """
+    Test admin-panel features (Galih).
+
+    Verifies:
+    - RBAC enforcement on admin-only routes (CWE-285, CWE-862)
+    - Audit logging on state-change actions
+    - Self-modification protection (admin cannot lock self out)
+    - No credential leakage in AuditLog.details
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        # Workaround for Python 3.14 + Django 4.2 incompat:
+        # Django 4.2's `BaseContext.__copy__` calls `copy(super())` which fails
+        # under Python 3.14, blowing up `store_rendered_templates`. Patch in a
+        # safe shallow copy.
+        from django.template.context import BaseContext
+
+        cls._original_basecontext_copy = BaseContext.__copy__
+
+        def _safe_copy(self):
+            duplicate = self.__class__.__new__(self.__class__)
+            duplicate.__dict__.update(self.__dict__)
+            duplicate.dicts = self.dicts[:]
+            return duplicate
+
+        BaseContext.__copy__ = _safe_copy
+        super().setUpClass()
+
+    @classmethod
+    def tearDownClass(cls):
+        from django.template.context import BaseContext
+        BaseContext.__copy__ = cls._original_basecontext_copy
+        super().tearDownClass()
+
+    @classmethod
+    def setUpTestData(cls):
+        from main.models import User
+        cls.admin = User.objects.create_user(
+            username='galih_admin',
+            email='galih_admin@test.com',
+            password='adminpass123',
+            role='admin',
+        )
+        cls.librarian = User.objects.create_user(
+            username='galih_librarian',
+            email='galih_librarian@test.com',
+            password='libpass123',
+            role='librarian',
+            employee_id='EMP-GAL-01',
+        )
+        cls.member = User.objects.create_user(
+            username='galih_member',
+            email='galih_member@test.com',
+            password='memberpass123',
+            role='member',
+            membership_number='MBR-GAL-01',
+        )
+
+    def test_tc_admin_01_member_blocked_from_admin_panel(self):
+        """TC-ADMIN-01: Member GET /admin-panel/ → 403."""
+        self.client.force_login(self.member)
+        response = self.client.get('/admin-panel/')
+        self.assertEqual(response.status_code, 403)
+
+    def test_tc_admin_02_librarian_blocked_from_user_list(self):
+        """TC-ADMIN-02: Librarian GET /admin-panel/users/ → 403."""
+        self.client.force_login(self.librarian)
+        response = self.client.get('/admin-panel/users/')
+        self.assertEqual(response.status_code, 403)
+
+    def test_tc_admin_03_admin_can_list_users(self):
+        """TC-ADMIN-03: Admin GET /admin-panel/users/ → 200, users appear in response."""
+        self.client.force_login(self.admin)
+        response = self.client.get('/admin-panel/users/')
+        self.assertEqual(response.status_code, 200)
+        body = response.content.decode('utf-8')
+        self.assertIn(self.admin.username, body)
+        self.assertIn(self.member.username, body)
+
+    def test_tc_admin_04_create_user_logs_audit(self):
+        """TC-ADMIN-04: Admin POST create user → User in DB + AuditLog entry."""
+        from main.models import User, AuditLog
+
+        self.client.force_login(self.admin)
+        response = self.client.post('/admin-panel/users/create/', {
+            'username': 'new_member_x',
+            'email': 'newx@test.com',
+            'password': 'newpass1234',
+            'role': 'member',
+            'employee_id': '',
+            'membership_number': 'MBR-NEW-X',
+        })
+        self.assertIn(response.status_code, (200, 302))
+        self.assertTrue(
+            User.objects.filter(username='new_member_x').exists(),
+            'New user should be created in DB',
+        )
+        self.assertTrue(
+            AuditLog.objects.filter(target_action='user_created').exists(),
+            'AuditLog entry for user_created should exist',
+        )
+
+    def test_tc_admin_05_admin_cannot_deactivate_self(self):
+        """TC-ADMIN-05: Admin POST toggle on self → blocked, is_active unchanged."""
+        from main.models import User
+
+        self.client.force_login(self.admin)
+        response = self.client.post(f'/admin-panel/users/{self.admin.id}/toggle/')
+        self.assertIn(response.status_code, (200, 302))
+
+        self.admin.refresh_from_db()
+        self.assertTrue(
+            self.admin.is_active,
+            'Admin should not be able to deactivate themselves',
+        )
+
+    def test_tc_admin_06_role_change_logged(self):
+        """TC-ADMIN-06: Admin changes member role → DB updated + AuditLog entry."""
+        from main.models import User, AuditLog
+
+        self.client.force_login(self.admin)
+        response = self.client.post(
+            f'/admin-panel/users/{self.member.id}/role/',
+            {'role': 'librarian'},
+        )
+        self.assertIn(response.status_code, (200, 302))
+
+        self.member.refresh_from_db()
+        self.assertEqual(self.member.role, 'librarian')
+        self.assertTrue(
+            AuditLog.objects.filter(
+                target_action='user_role_changed',
+                performed_by=self.admin,
+            ).exists(),
+            'AuditLog entry for user_role_changed should exist',
+        )
+
+    def test_tc_admin_07_audit_log_no_password_leak(self):
+        """TC-ADMIN-07: create_audit_log() must reject details containing 'password'."""
+        from main.audit import create_audit_log
+        from main.models import AuditLog
+
+        with self.assertRaises(ValueError):
+            create_audit_log(
+                'test_action',
+                self.admin,
+                'attempted to leak password=secret123',
+            )
+
+        # Also assert no existing audit log row has 'password' in details
+        self.assertFalse(
+            AuditLog.objects.filter(details__icontains='password').exists(),
+            'No AuditLog entry should contain the substring "password"',
+        )
