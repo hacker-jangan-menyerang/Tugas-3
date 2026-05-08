@@ -410,48 +410,6 @@ transaction.return_date = timezone.now()  # Bukan dari request.POST
 python manage.py test main.tests -v 2
 ```
 
-### Screenshot Aplikasi
-
-#### Member Dashboard
-<!-- TODO: Tambahkan screenshot member dashboard -->
-> 📸 `[Screenshot: Member Dashboard — tampilan grid buku dengan tombol Borrow/Read]`
-
-#### Borrow Confirmation
-<!-- TODO: Tambahkan screenshot halaman konfirmasi borrow -->
-> 📸 `[Screenshot: Borrow Confirm — form dengan CSRF token visible di view source]`
-
-#### Borrow History
-<!-- TODO: Tambahkan screenshot borrow history -->
-> 📸 `[Screenshot: Borrow History — tabel riwayat peminjaman milik member]`
-
-#### Return Confirmation
-<!-- TODO: Tambahkan screenshot halaman return -->
-> 📸 `[Screenshot: Return Confirm — form POST dengan CSRF token]`
-
-#### Read Online
-<!-- TODO: Tambahkan screenshot halaman read online -->
-> 📸 `[Screenshot: Read Online — halaman baca buku]`
-
-### Screenshot Hasil Test Case
-
-#### TC-CSRF-01: POST tanpa CSRF Token → 403
-<!-- TODO: Tambahkan screenshot curl/Postman POST tanpa token → 403 -->
-> 📸 `[Screenshot: curl -X POST /member/borrow/1/ tanpa CSRF token → 403 Forbidden]`
-
-#### TC-CSRF-03: POST dengan CSRF Token Valid → Sukses
-<!-- TODO: Tambahkan screenshot borrow berhasil -->
-> 📸 `[Screenshot: Borrow berhasil dengan CSRF token valid → redirect ke history]`
-
-#### TC-IDOR-01: Member A Return Buku Member B → 404
-<!-- TODO: Tambahkan screenshot IDOR test -->
-> 📸 `[Screenshot: Member A coba return buku Member B → 404 Not Found]`
-
-#### TC-CSRF & TC-IDOR Test Output
-<!-- TODO: Tambahkan screenshot output python manage.py test -->
-> 📸 `[Screenshot: Output terminal — semua TC-CSRF dan TC-IDOR pass]`
-
----
-
 ## CWE References
 
 | CWE | Name | Mitigation Implemented |
