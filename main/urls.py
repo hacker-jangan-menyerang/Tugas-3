@@ -4,6 +4,7 @@ from . import search_views
 from . import auth_views
 from . import member_views
 from . import admin_views
+from . import librarian_views
 
 app_name = 'main'
 
@@ -31,6 +32,18 @@ urlpatterns = [
     path('member/history/', member_views.borrow_history, name='borrow_history'),
     path('member/read/<int:book_id>/', member_views.read_online, name='read_online'),
 
+    # Librarian features (Roberto) — all protected by @role_required('librarian')
+    path('librarian/', librarian_views.librarian_dashboard, name='librarian_dashboard'),
+    path('librarian/books/', librarian_views.book_management_list, name='book_management_list'),
+    path('librarian/add-book/', librarian_views.add_book, name='add_book'),
+    path('librarian/update-book/<int:book_id>/', librarian_views.update_book, name='update_book'),
+    path('librarian/delete-book/<int:book_id>/', librarian_views.delete_book, name='delete_book'),
+    path('librarian/categories/', librarian_views.category_list, name='category_list'),
+    path('librarian/categories/add/', librarian_views.add_category, name='add_category'),
+    path('librarian/categories/<int:category_id>/update/', librarian_views.update_category, name='update_category'),
+    path('librarian/categories/<int:category_id>/delete/', librarian_views.delete_category, name='delete_category'),
+    path('librarian/report/', librarian_views.generate_report, name='generate_report'),
+
     # Admin dashboard (Galih)
     path('admin-panel/', admin_views.admin_dashboard, name='admin_dashboard'),
 
@@ -44,3 +57,4 @@ urlpatterns = [
     # Audit log view (Galih)
     path('admin-panel/audit-log/', admin_views.audit_log_list, name='audit_log_list'),
 ]
+

@@ -47,6 +47,11 @@
                         {% if user.role == 'member' %}
                             <a href="{% url 'main:member_dashboard' %}" class="text-slate-300 hover:text-white transition-colors">Dashboard</a>
                             <a href="{% url 'main:borrow_history' %}" class="text-slate-300 hover:text-white transition-colors">My History</a>
+                        {% elif user.role == 'librarian' %}
+                            <a href="{% url 'main:librarian_dashboard' %}" class="text-slate-300 hover:text-white transition-colors">Dashboard</a>
+                            <a href="{% url 'main:book_management_list' %}" class="text-slate-300 hover:text-white transition-colors">Books</a>
+                            <a href="{% url 'main:category_list' %}" class="text-slate-300 hover:text-white transition-colors">Categories</a>
+                            <a href="{% url 'main:generate_report' %}" class="text-slate-300 hover:text-white transition-colors">Report</a>
                         {% elif user.role == 'admin' %}
                             <a href="{% url 'main:admin_dashboard' %}" class="text-slate-300 hover:text-white transition-colors">Dashboard</a>
                             <a href="{% url 'main:lockout_admin' %}" class="text-slate-300 hover:text-white transition-colors">Admin Panel</a>

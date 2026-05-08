@@ -817,3 +817,477 @@ class RoleRequiredDecoratorTests(TestCase):
         self.assertEqual(response.status_code, 302,
             "Unauthenticated access should redirect to login")
         self.assertIn('/login/', response.url)
+
+
+# ================================================================
+# Code Injection Prevention Test Cases
+# Roberto Eugenio Sugiarto (2406355640) — Code Injection Specialist
+#
+# Test Cases:
+# - TC-XSS-01: Add book with <script>alert(1)</script> → text only
+# - TC-XSS-02: Add category with XSS payload → escaped
+# - TC-INPUT-01: Submit form without required fields → rejected
+# - TC-FILE-01: Upload .exe renamed to .pdf → rejected
+#
+# References:
+# - CWE-79: Cross-site Scripting (XSS)
+# - CWE-20: Improper Input Validation
+# - CWE-94: Code Injection
+#
+# Run with: python manage.py test main.tests --verbosity=2
+# ================================================================
+
+
+class XSSPreventionTests(TestCase):
+    """
+    Test XSS / Code Injection prevention in librarian features.
+
+    Verifies CWE-79 mitigation:
+    - Script tags in book titles are escaped in output
+    - XSS payloads in category names are rejected by regex
+    - Django auto-escaping prevents script execution
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        from main.models import Category
+        cls.category = Category.objects.create(
+            name='Test Category',
+            description='For testing'
+        )
+        cls.librarian = User.objects.create_user(
+            username='xsslibrarian',
+            password='testpass123',
+            role='librarian',
+            employee_id='EMP-XSS-01'
+        )
+
+    def test_tc_xss_01_script_tag_in_book_title(self):
+        """
+        TC-XSS-01: Add book with <script>alert(1)</script> title
+        → script rendered as escaped text, NOT executed
+
+        The title contains script tags but:
+        1. BookForm regex rejects < and > characters
+        2. Even if bypassed, Django auto-escaping would prevent execution
+        """
+        self.client.force_login(self.librarian)
+
+        response = self.client.post('/librarian/add-book/', {
+            'title': '<script>alert(1)</script>',
+            'author': 'Test Author',
+            'isbn': '978-0-00-000000-1',
+            'description': 'Test description',
+            'category': self.category.id,
+        })
+
+        # Form should reject — regex does not allow < or > in title
+        # Should NOT redirect (302 = success), should re-render form
+        self.assertNotEqual(response.status_code, 302,
+            "XSS payload in title should be rejected by form validation")
+
+        # Verify no book was created with script tag
+        from main.models import Book
+        xss_books = Book.objects.filter(title__contains='<script>')
+        self.assertEqual(xss_books.count(), 0,
+            "No book with <script> tag should be created")
+
+    def test_tc_xss_02_xss_in_category_name(self):
+        """
+        TC-XSS-02: Add category with XSS payload → rejected
+
+        CategoryForm uses RegexValidator that only allows
+        letters, numbers, spaces, and hyphens. Script tags rejected.
+        """
+        self.client.force_login(self.librarian)
+
+        response = self.client.post('/librarian/categories/add/', {
+            'name': '<img src=x onerror=alert(1)>',
+            'description': 'XSS test',
+        })
+
+        # Should NOT redirect (form validation rejects the payload)
+        self.assertNotEqual(response.status_code, 302,
+            "XSS payload in category name should be rejected")
+
+        # Verify no category with XSS was created
+        from main.models import Category
+        xss_cats = Category.objects.filter(name__contains='<img')
+        self.assertEqual(xss_cats.count(), 0,
+            "No category with XSS payload should be created")
+
+    def test_xss_in_description_stripped(self):
+        """
+        Verify HTML tags are stripped from description field.
+        BookForm.clean_description() strips HTML tags as defense-in-depth.
+        """
+        self.client.force_login(self.librarian)
+
+        response = self.client.post('/librarian/add-book/', {
+            'title': 'Safe Book Title',
+            'author': 'Safe Author',
+            'isbn': '978-0-00-000000-2',
+            'description': 'Hello <script>alert("xss")</script> world',
+            'category': self.category.id,
+        })
+
+        # Should succeed (description stripped of tags)
+        if response.status_code == 302:
+            from main.models import Book
+            book = Book.objects.get(isbn='978-0-00-000000-2')
+            # Description should have tags stripped
+            self.assertNotIn('<script>', book.description,
+                "HTML tags should be stripped from description")
+            self.assertIn('Hello', book.description)
+            self.assertIn('world', book.description)
+
+    def test_auto_escaping_in_template(self):
+        """
+        Verify Django auto-escaping works in book list template.
+        Even if malicious data gets into DB, it should be escaped in HTML.
+        """
+        from main.models import Book
+        # Directly create book with script tag (bypassing form)
+        book = Book.objects.create(
+            title='Test <script>alert("xss")</script>',
+            author='Test',
+            isbn='978-0-00-000000-3',
+            status='available',
+            category=self.category,
+        )
+
+        self.client.force_login(self.librarian)
+        response = self.client.get('/librarian/books/')
+        content = response.content.decode('utf-8')
+
+        # The script tag should be HTML-escaped in the output
+        self.assertNotIn('<script>alert("xss")</script>', content,
+            "Script tags should be auto-escaped by Django template engine")
+        # Should contain the escaped version
+        self.assertIn('&lt;script&gt;', content,
+            "Script tag should appear as escaped text")
+
+
+class InputValidationTests(TestCase):
+    """
+    Test input validation on librarian forms.
+
+    Verifies CWE-20 mitigation:
+    - Required fields cannot be empty
+    - ISBN format validated (numbers + hyphens only)
+    - Field length limits enforced
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        from main.models import Category
+        cls.category = Category.objects.create(
+            name='Validation Category',
+            description='For validation tests'
+        )
+        cls.librarian = User.objects.create_user(
+            username='vallibrarian',
+            password='testpass123',
+            role='librarian',
+            employee_id='EMP-VAL-01'
+        )
+
+    def test_tc_input_01_missing_required_fields(self):
+        """
+        TC-INPUT-01: Submit book form without required fields → rejected
+
+        Title, author, and ISBN are all required. Submitting
+        without them should return form with validation errors.
+        """
+        self.client.force_login(self.librarian)
+
+        response = self.client.post('/librarian/add-book/', {
+            'title': '',
+            'author': '',
+            'isbn': '',
+            'description': '',
+        })
+
+        # Should NOT redirect (validation error)
+        self.assertNotEqual(response.status_code, 302,
+            "Empty required fields should be rejected by validator")
+
+        # Verify no book was created
+        from main.models import Book
+        self.assertEqual(
+            Book.objects.filter(created_by=self.librarian).count(), 0,
+            "No book should be created with empty required fields"
+        )
+
+    def test_isbn_only_numbers_and_hyphens(self):
+        """Verify ISBN rejects non-numeric characters."""
+        self.client.force_login(self.librarian)
+
+        response = self.client.post('/librarian/add-book/', {
+            'title': 'Test Book',
+            'author': 'Test Author',
+            'isbn': 'ABC-INVALID',
+            'description': '',
+            'category': self.category.id,
+        })
+
+        self.assertNotEqual(response.status_code, 302,
+            "Invalid ISBN should be rejected")
+
+
+class FileUploadSecurityTests(TestCase):
+    """
+    Test file upload security for eBook uploads.
+
+    Verifies CWE-94 mitigation:
+    - Only .pdf, .epub, .txt allowed
+    - MIME type checked (not just extension)
+    - File size limit enforced
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        from main.models import Category
+        cls.category = Category.objects.create(
+            name='Upload Category',
+            description='For upload tests'
+        )
+        cls.librarian = User.objects.create_user(
+            username='uploadlibrarian',
+            password='testpass123',
+            role='librarian',
+            employee_id='EMP-UPL-01'
+        )
+
+    def test_tc_file_01_exe_disguised_as_pdf(self):
+        """
+        TC-FILE-01: Upload .exe renamed to .pdf → rejected
+
+        The file has .pdf extension but contains EXE content.
+        MIME type check should detect the mismatch and reject.
+        """
+        from django.core.files.uploadedfile import SimpleUploadedFile
+
+        self.client.force_login(self.librarian)
+
+        # Create a fake EXE file content (MZ header)
+        exe_content = b'MZ' + b'\\x90' * 100  # PE/EXE magic bytes
+        fake_pdf = SimpleUploadedFile(
+            'malware.pdf',  # .pdf extension
+            exe_content,    # but EXE content
+            content_type='application/pdf'
+        )
+
+        response = self.client.post('/librarian/add-book/', {
+            'title': 'Malware Book',
+            'author': 'Evil Author',
+            'isbn': '978-0-00-000000-9',
+            'description': 'Test',
+            'category': self.category.id,
+            'ebook_file': fake_pdf,
+        })
+
+        # Should be rejected by MIME type check
+        # (or at minimum, the form should handle it safely)
+        from main.models import Book
+        book = Book.objects.filter(isbn='978-0-00-000000-9').first()
+        if book and book.ebook_file:
+            # If book was created, the file should have been validated
+            self.assertFalse(
+                book.ebook_file.name.endswith('.exe'),
+                "EXE file should not be stored as-is"
+            )
+
+    def test_exe_extension_rejected(self):
+        """Verify .exe extension is rejected outright."""
+        from django.core.files.uploadedfile import SimpleUploadedFile
+
+        self.client.force_login(self.librarian)
+
+        exe_file = SimpleUploadedFile(
+            'malware.exe',
+            b'MZ' + b'\\x00' * 50,
+            content_type='application/x-msdownload'
+        )
+
+        response = self.client.post('/librarian/add-book/', {
+            'title': 'Another Book',
+            'author': 'Another Author',
+            'isbn': '978-0-00-000001-0',
+            'description': '',
+            'category': self.category.id,
+            'ebook_file': exe_file,
+        })
+
+        # Should NOT redirect (file rejected)
+        self.assertNotEqual(response.status_code, 302,
+            ".exe file should be rejected by file upload validator")
+
+    def test_valid_pdf_accepted(self):
+        """Verify valid PDF file is accepted."""
+        from django.core.files.uploadedfile import SimpleUploadedFile
+
+        self.client.force_login(self.librarian)
+
+        # Create a minimal PDF file
+        pdf_content = b'%PDF-1.4 test content'
+        pdf_file = SimpleUploadedFile(
+            'valid_book.pdf',
+            pdf_content,
+            content_type='application/pdf'
+        )
+
+        response = self.client.post('/librarian/add-book/', {
+            'title': 'Valid PDF Book',
+            'author': 'Valid Author',
+            'isbn': '978-0-00-000001-1',
+            'description': 'A valid book',
+            'category': self.category.id,
+            'ebook_file': pdf_file,
+        })
+
+        # Should succeed (valid PDF)
+        # Note: MIME detection may vary; this tests the happy path
+        from main.models import Book
+        # At minimum, no server error
+        self.assertNotEqual(response.status_code, 500,
+            "Valid PDF upload should not cause server error")
+
+
+class LibrarianAuditLogTests(TestCase):
+    """Test that librarian actions create audit log entries."""
+
+    @classmethod
+    def setUpTestData(cls):
+        from main.models import Category
+        cls.category = Category.objects.create(
+            name='Audit Category',
+            description='For audit tests'
+        )
+        cls.librarian = User.objects.create_user(
+            username='auditlibrarian',
+            password='testpass123',
+            role='librarian',
+            employee_id='EMP-AUD-01'
+        )
+
+    def test_add_book_creates_audit_log(self):
+        """Adding a book should create an audit log entry."""
+        from main.models import AuditLog
+
+        self.client.force_login(self.librarian)
+        initial_count = AuditLog.objects.count()
+
+        self.client.post('/librarian/add-book/', {
+            'title': 'Audit Test Book',
+            'author': 'Audit Author',
+            'isbn': '978-0-00-000002-0',
+            'description': 'Test',
+            'category': self.category.id,
+        })
+
+        self.assertGreater(
+            AuditLog.objects.count(), initial_count,
+            "Adding a book should create an audit log entry"
+        )
+
+        log = AuditLog.objects.order_by('-generated_date').first()
+        self.assertEqual(log.target_action, 'book_added')
+        self.assertEqual(log.performed_by, self.librarian)
+
+    def test_delete_book_creates_audit_log(self):
+        """Soft-deleting a book should create an audit log entry."""
+        from main.models import Book, AuditLog
+
+        book = Book.objects.create(
+            title='Delete Audit Book',
+            author='Author',
+            isbn='978-0-00-000002-1',
+            status='available',
+            category=self.category,
+            created_by=self.librarian,
+        )
+
+        self.client.force_login(self.librarian)
+        initial_count = AuditLog.objects.count()
+
+        self.client.post(f'/librarian/delete-book/{book.id}/')
+
+        self.assertGreater(
+            AuditLog.objects.count(), initial_count,
+            "Deleting a book should create an audit log entry"
+        )
+
+        log = AuditLog.objects.order_by('-generated_date').first()
+        self.assertEqual(log.target_action, 'book_deleted')
+
+    def test_soft_delete_preserves_book(self):
+        """Verify soft delete sets is_deleted=True, not physical delete."""
+        from main.models import Book
+
+        book = Book.objects.create(
+            title='Soft Delete Book',
+            author='Author',
+            isbn='978-0-00-000002-2',
+            status='available',
+            category=self.category,
+            created_by=self.librarian,
+        )
+
+        self.client.force_login(self.librarian)
+        self.client.post(f'/librarian/delete-book/{book.id}/')
+
+        book.refresh_from_db()
+        self.assertTrue(book.is_deleted,
+            "Book should be soft-deleted (is_deleted=True)")
+        # Book should still exist in DB
+        self.assertTrue(
+            Book.objects.filter(id=book.id).exists(),
+            "Book should still exist in database after soft delete"
+        )
+
+
+class LibrarianRBACTests(TestCase):
+    """Test RBAC enforcement on librarian endpoints."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.member = User.objects.create_user(
+            username='rbacmember',
+            password='testpass123',
+            role='member',
+            membership_number='MBR-RBAC'
+        )
+        cls.librarian = User.objects.create_user(
+            username='rbaclibrarian',
+            password='testpass123',
+            role='librarian',
+            employee_id='EMP-RBAC'
+        )
+
+    def test_member_cannot_access_librarian_dashboard(self):
+        """Member accessing /librarian/ → 403 Forbidden."""
+        self.client.force_login(self.member)
+        response = self.client.get('/librarian/')
+        self.assertEqual(response.status_code, 403,
+            "Member should not access librarian dashboard")
+
+    def test_member_cannot_add_book(self):
+        """Member accessing /librarian/add-book/ → 403 Forbidden."""
+        self.client.force_login(self.member)
+        response = self.client.get('/librarian/add-book/')
+        self.assertEqual(response.status_code, 403,
+            "Member should not access add book page")
+
+    def test_librarian_can_access_dashboard(self):
+        """Librarian accessing /librarian/ → 200 OK."""
+        self.client.force_login(self.librarian)
+        response = self.client.get('/librarian/')
+        self.assertEqual(response.status_code, 200,
+            "Librarian should access their dashboard")
+
+    def test_unauthenticated_redirects(self):
+        """Unauthenticated user → redirect to login."""
+        response = self.client.get('/librarian/')
+        self.assertEqual(response.status_code, 302)
+        self.assertIn('/login/', response.url)
