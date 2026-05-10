@@ -1,0 +1,128 @@
+{% extends 'main/base.html' %}
+
+{% block title %}Login - Digital Library{% endblock %}
+
+{% block content %}
+<div class="flex items-center justify-center min-h-[60vh]">
+    <div class="w-full max-w-md">
+        <!-- Login Card -->
+        <div class="bg-white rounded-2xl border border-slate-200 shadow-lg overflow-hidden">
+            <!-- Header -->
+            <div class="bg-slate-900 px-6 py-6 text-center">
+                <div class="text-3xl mb-2">📚</div>
+                <h2 class="text-2xl font-bold text-white">Welcome Back</h2>
+                <p class="text-slate-400 text-sm mt-1">Sign in to Digital Library</p>
+            </div>
+
+            <!-- Blood accent bar -->
+            <div class="h-1 bg-gradient-to-r from-red-800 via-red-600 to-red-800"></div>
+
+            <!-- Form Body -->
+            <div class="p-6 space-y-5">
+                <!-- Error Messages -->
+                {% if messages %}
+                    {% for message in messages %}
+                        <div class="px-4 py-3 rounded-lg text-sm font-medium
+                            {% if message.tags == 'error' %}
+                                bg-red-50 text-red-700 border border-red-200
+                            {% elif message.tags == 'success' %}
+                                bg-green-50 text-green-700 border border-green-200
+                            {% else %}
+                                bg-blue-50 text-blue-700 border border-blue-200
+                            {% endif %}
+                        ">
+                            {{ message }}
+                        </div>
+                    {% endfor %}
+                {% endif %}
+
+                <!--
+                    CSRF Protection (CWE-352):
+                    - {% csrf_token %} generates a hidden input with a unique token
+                    - CsrfViewMiddleware verifies this token on POST
+                    - Without valid token, server returns 403 Forbidden
+                -->
+                <form method="post" id="login-form">
+                    {% csrf_token %}
+
+                    <!-- Username Field -->
+                    <div class="space-y-2 mb-4">
+                        <label for="id_username" class="block text-sm font-medium text-slate-700">
+                            Username
+                        </label>
+                        {{ form.username }}
+                        {% if form.username.errors %}
+                            <p class="text-red-600 text-xs mt-1">{{ form.username.errors.0 }}</p>
+                        {% endif %}
+                    </div>
+
+                    <!-- Password Field -->
+                    <div class="space-y-2 mb-6">
+                        <label for="id_password" class="block text-sm font-medium text-slate-700">
+                            Password
+                        </label>
+                        {{ form.password }}
+                        {% if form.password.errors %}
+                            <p class="text-red-600 text-xs mt-1">{{ form.password.errors.0 }}</p>
+                        {% endif %}
+                    </div>
+
+                    <!-- Submit Button -->
+                    <button
+                        type="submit"
+                        id="login-submit"
+                        class="w-full px-4 py-3 bg-red-800 text-white font-semibold rounded-lg
+                               hover:bg-red-900 active:bg-red-950 transition-all duration-200
+                               focus:ring-2 focus:ring-red-700/50 focus:outline-none"
+                    >
+                        Sign In
+                    </button>
+                </form>
+            </div>
+
+            <!-- Footer -->
+            <div class="px-6 py-4 bg-slate-50 border-t border-slate-200 text-center">
+                <p class="text-sm text-slate-500">
+                    Don't have an account?
+                    <a href="{% url 'main:register' %}" class="text-red-700 hover:text-red-800 font-medium">
+                        Register here
+                    </a>
+                </p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Lockout countdown timer (hidden by default) -->
+<div id="lockout-timer" class="hidden fixed bottom-4 right-4 bg-red-800 text-white px-4 py-3 rounded-lg shadow-lg" data-lockout-seconds="{{ lockout_seconds|default:0 }}">
+    <p class="font-semibold">Account Locked</p>
+    <p class="text-sm">Try again in <span id="countdown-minutes">15</span> minutes</p>
+</div>
+
+<script>
+// Check for lockout message and show timer
+// Only shows timer when user is actually locked out (not just on any error)
+document.addEventListener('DOMContentLoaded', function() {
+    const timer = document.getElementById('lockout-timer');
+    const lockoutSeconds = parseInt(timer.getAttribute('data-lockout-seconds'), 10) || 0;
+
+    if (lockoutSeconds > 0) {
+        timer.classList.remove('hidden');
+        startCountdown(lockoutSeconds);
+    }
+});
+
+function startCountdown(seconds) {
+    let remaining = seconds;
+    const display = document.getElementById('countdown-minutes');
+
+    setInterval(function() {
+        remaining--;
+        if (remaining <= 0) {
+            location.reload();
+        }
+        display.textContent = Math.ceil(remaining / 60);
+    }, 1000);
+}
+</script>
+{% endblock %}

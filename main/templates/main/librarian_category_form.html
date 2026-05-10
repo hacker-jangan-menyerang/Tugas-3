@@ -1,0 +1,35 @@
+{% extends 'main/base.html' %}
+{% block title %}{{ form_title }} - Digital Library{% endblock %}
+{% block content %}
+<div class="max-w-xl mx-auto space-y-6">
+    <div>
+        <a href="{% url 'main:category_list' %}" class="text-sm text-slate-500 hover:text-red-700 transition-colors">← Back to Categories</a>
+        <h2 class="text-3xl font-bold text-slate-900 mt-2">{{ form_title }}</h2>
+    </div>
+    {% if messages %}{% for message in messages %}
+    <div class="px-4 py-3 rounded-lg text-sm font-medium {% if message.tags == 'error' %}bg-red-50 text-red-700 border border-red-200{% elif message.tags == 'success' %}bg-green-50 text-green-700 border border-green-200{% else %}bg-blue-50 text-blue-700 border border-blue-200{% endif %}">{{ message }}</div>
+    {% endfor %}{% endif %}
+    <div class="bg-white border border-slate-200 rounded-2xl shadow-sm p-8">
+        <form method="post" class="space-y-5" id="category-form">
+            {% csrf_token %}
+            <div>
+                <label for="id_name" class="block text-sm font-semibold text-slate-700 mb-1.5">Name <span class="text-red-500">*</span></label>
+                {{ form.name }}
+                {% for error in form.name.errors %}<p class="text-red-500 text-xs mt-1">{{ error }}</p>{% endfor %}
+                <p class="text-xs text-slate-400 mt-1">Letters, numbers, spaces, and hyphens only</p>
+            </div>
+            <div>
+                <label for="id_description" class="block text-sm font-semibold text-slate-700 mb-1.5">Description</label>
+                {{ form.description }}
+                {% for error in form.description.errors %}<p class="text-red-500 text-xs mt-1">{{ error }}</p>{% endfor %}
+                <p class="text-xs text-slate-400 mt-1">HTML tags will be stripped (max 500 chars)</p>
+            </div>
+            {% if form.non_field_errors %}<div class="px-4 py-3 bg-red-50 border border-red-200 rounded-lg">{% for error in form.non_field_errors %}<p class="text-red-700 text-sm">{{ error }}</p>{% endfor %}</div>{% endif %}
+            <div class="flex gap-3 pt-4 border-t border-slate-100">
+                <button type="submit" class="px-6 py-3 bg-red-800 text-white font-semibold rounded-lg hover:bg-red-900 transition-colors" id="submit-category-btn">{{ submit_label }}</button>
+                <a href="{% url 'main:category_list' %}" class="px-6 py-3 bg-slate-200 text-slate-700 font-semibold rounded-lg hover:bg-slate-300 transition-colors">Cancel</a>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}
