@@ -1,0 +1,68 @@
+{% extends 'main/base.html' %}
+{% block title %}{{ form_title }} - Digital Library{% endblock %}
+{% block content %}
+<div class="max-w-2xl mx-auto space-y-6">
+    <div>
+        <a href="{% url 'main:book_management_list' %}" class="text-sm text-slate-500 hover:text-red-700 transition-colors">← Back to Book List</a>
+        <h2 class="text-3xl font-bold text-slate-900 mt-2">{{ form_title }}</h2>
+        <p class="text-slate-500 mt-1">All fields are validated to prevent code injection (CWE-79, CWE-20)</p>
+    </div>
+    {% if messages %}{% for message in messages %}
+    <div class="px-4 py-3 rounded-lg text-sm font-medium {% if message.tags == 'error' %}bg-red-50 text-red-700 border border-red-200{% elif message.tags == 'success' %}bg-green-50 text-green-700 border border-green-200{% else %}bg-blue-50 text-blue-700 border border-blue-200{% endif %}">{{ message }}</div>
+    {% endfor %}{% endif %}
+    <div class="bg-white border border-slate-200 rounded-2xl shadow-sm p-8">
+        <form method="post" enctype="multipart/form-data" class="space-y-5" id="book-form">
+            {% csrf_token %}
+            <div>
+                <label for="id_title" class="block text-sm font-semibold text-slate-700 mb-1.5">Title <span class="text-red-500">*</span></label>
+                {{ form.title }}
+                {% for error in form.title.errors %}<p class="text-red-500 text-xs mt-1">{{ error }}</p>{% endfor %}
+                <p class="text-xs text-slate-400 mt-1">Letters, numbers, spaces, and common punctuation only</p>
+            </div>
+            <div>
+                <label for="id_author" class="block text-sm font-semibold text-slate-700 mb-1.5">Author <span class="text-red-500">*</span></label>
+                {{ form.author }}
+                {% for error in form.author.errors %}<p class="text-red-500 text-xs mt-1">{{ error }}</p>{% endfor %}
+            </div>
+            <div>
+                <label for="id_isbn" class="block text-sm font-semibold text-slate-700 mb-1.5">ISBN <span class="text-red-500">*</span></label>
+                {{ form.isbn }}
+                {% for error in form.isbn.errors %}<p class="text-red-500 text-xs mt-1">{{ error }}</p>{% endfor %}
+                <p class="text-xs text-slate-400 mt-1">Numbers and hyphens only (e.g. 978-0-13-468599-1)</p>
+            </div>
+            <div>
+                <label for="id_description" class="block text-sm font-semibold text-slate-700 mb-1.5">Description</label>
+                {{ form.description }}
+                {% for error in form.description.errors %}<p class="text-red-500 text-xs mt-1">{{ error }}</p>{% endfor %}
+                <p class="text-xs text-slate-400 mt-1">HTML tags will be automatically stripped (max 2000 chars)</p>
+            </div>
+            <div>
+                <label for="id_category" class="block text-sm font-semibold text-slate-700 mb-1.5">Category</label>
+                {{ form.category }}
+                {% for error in form.category.errors %}<p class="text-red-500 text-xs mt-1">{{ error }}</p>{% endfor %}
+            </div>
+            <div>
+                <label for="id_ebook_file" class="block text-sm font-semibold text-slate-700 mb-1.5">eBook File</label>
+                {{ form.ebook_file }}
+                {% for error in form.ebook_file.errors %}<p class="text-red-500 text-xs mt-1">{{ error }}</p>{% endfor %}
+                <p class="text-xs text-slate-400 mt-1">Allowed: PDF, EPUB, TXT only (max 50 MB). MIME type is verified.</p>
+                {% if book and book.ebook_file %}<p class="text-xs text-green-600 mt-1">Current file: {{ book.ebook_file.name }}</p>{% endif %}
+            </div>
+            {% if form.non_field_errors %}<div class="px-4 py-3 bg-red-50 border border-red-200 rounded-lg">{% for error in form.non_field_errors %}<p class="text-red-700 text-sm">{{ error }}</p>{% endfor %}</div>{% endif %}
+            <div class="flex gap-3 pt-4 border-t border-slate-100">
+                <button type="submit" class="px-6 py-3 bg-red-800 text-white font-semibold rounded-lg hover:bg-red-900 transition-colors" id="submit-book-btn">{{ submit_label }}</button>
+                <a href="{% url 'main:book_management_list' %}" class="px-6 py-3 bg-slate-200 text-slate-700 font-semibold rounded-lg hover:bg-slate-300 transition-colors">Cancel</a>
+            </div>
+        </form>
+    </div>
+    <div class="bg-slate-50 border border-slate-200 rounded-xl p-4">
+        <h4 class="text-sm font-semibold text-slate-700 mb-2">🔒 Security Measures</h4>
+        <ul class="text-xs text-slate-500 space-y-1">
+            <li>• <strong>Input Validation:</strong> Allowlist regex (CWE-20)</li>
+            <li>• <strong>XSS Prevention:</strong> HTML tags stripped, auto-escaped (CWE-79)</li>
+            <li>• <strong>File Upload:</strong> Extension + MIME type validation (CWE-94)</li>
+            <li>• <strong>CSRF Protection:</strong> Token verified on POST (CWE-352)</li>
+        </ul>
+    </div>
+</div>
+{% endblock %}

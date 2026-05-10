@@ -1,0 +1,110 @@
+{% extends 'main/base.html' %}
+
+{% block title %}Search Results - Digital Library{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <!-- Page Header -->
+    <div class="text-center py-8">
+        <h2 class="text-3xl font-bold text-slate-900 mb-2">Search Results</h2>
+        <p class="text-slate-500">
+            {% if query %}
+                Found <span class="font-semibold text-red-800">{{ count }}</span> book(s) for "<span class="font-medium">{{ query }}</span>"
+            {% else %}
+                No search query provided
+            {% endif %}
+        </p>
+    </div>
+
+    <!-- Search Form -->
+    <form action="{% url 'main:search_books' %}" method="get" class="bg-slate-50 rounded-xl p-4 border border-slate-200 flex gap-3">
+        <input
+            type="text"
+            name="q"
+            value="{{ query }}"
+            placeholder="Search by title, author, or ISBN..."
+            class="flex-1 px-4 py-3 rounded-lg border border-slate-300 focus:border-red-700 focus:ring-2 focus:ring-red-700/20 outline-none transition-all"
+        >
+        <button
+            type="submit"
+            class="px-6 py-3 bg-red-800 text-white font-medium rounded-lg hover:bg-red-900 transition-colors"
+        >
+            Search
+        </button>
+    </form>
+
+    <!-- Results Count Badge -->
+    {% if query %}
+    <div class="flex items-center gap-2 text-sm">
+        <span class="px-3 py-1 bg-red-100 text-red-800 rounded-full font-medium">
+            {{ count }} result(s)
+        </span>
+    </div>
+    {% endif %}
+
+    <!-- Book Grid -->
+    {% if books %}
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {% for book in books %}
+                <div class="bg-white rounded-xl border border-slate-200 overflow-hidden hover:shadow-xl hover:-translate-y-1 transition-all duration-300 group flex flex-col">
+                    <!-- Card Body -->
+                    <div class="p-5 space-y-3 flex-1">
+                        <div class="flex items-start justify-between gap-2">
+                            <h3 class="text-lg font-semibold text-slate-900 group-hover:text-red-800 transition-colors line-clamp-2">
+                                {{ book.title }}
+                            </h3>
+                            {% if book.status == 'available' %}
+                                <span class="shrink-0 px-2 py-1 text-xs font-medium bg-green-100 text-green-700 rounded-full">
+                                    Available
+                                </span>
+                            {% else %}
+                                <span class="shrink-0 px-2 py-1 text-xs font-medium bg-red-100 text-red-700 rounded-full">
+                                    Borrowed
+                                </span>
+                            {% endif %}
+                        </div>
+
+                        <p class="text-sm text-slate-500">
+                            <span class="font-medium text-slate-700">Author:</span> {{ book.author }}
+                        </p>
+
+                        <p class="text-sm text-slate-500">
+                            <span class="font-medium text-slate-700">ISBN:</span> {{ book.isbn }}
+                        </p>
+
+                        <p class="text-sm text-slate-500">
+                            <span class="font-medium text-slate-700">Category:</span>
+                            <span class="inline-block px-2 py-0.5 bg-slate-100 text-slate-600 rounded text-xs">
+                                {{ book.category.name|default:"Uncategorized" }}
+                            </span>
+                        </p>
+                    </div>
+
+                    <!-- Card Footer -->
+                    <div class="px-5 py-4 bg-slate-50 border-t border-slate-100">
+                        <a
+                            href="{% url 'main:book_detail' book.id %}"
+                            class="block w-full text-center px-4 py-2 bg-slate-900 text-white font-medium rounded-lg hover:bg-red-800 transition-colors"
+                        >
+                            View Details
+                        </a>
+                    </div>
+                </div>
+            {% endfor %}
+        </div>
+    {% else %}
+        <!-- Empty State -->
+        <div class="text-center py-16 bg-slate-50 rounded-xl border border-slate-200">
+            <div class="text-5xl mb-4">🔍</div>
+            <h3 class="text-lg font-medium text-slate-700 mb-2">No books found</h3>
+            <p class="text-slate-500 mb-4">Try adjusting your search terms</p>
+            <a
+                href="{% url 'main:book_list' %}"
+                class="inline-block px-4 py-2 bg-slate-900 text-white font-medium rounded-lg hover:bg-red-800 transition-colors"
+            >
+                Browse All Books
+            </a>
+        </div>
+    {% endif %}
+</div>
+{% endblock %}

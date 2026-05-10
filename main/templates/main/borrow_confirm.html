@@ -1,0 +1,99 @@
+{% extends 'main/base.html' %}
+
+{% block title %}Borrow "{{ book.title }}" - Digital Library{% endblock %}
+
+{% block content %}
+<div class="max-w-2xl mx-auto space-y-6">
+    <!-- Breadcrumb -->
+    <nav class="flex items-center gap-2 text-sm text-slate-500">
+        <a href="{% url 'main:member_dashboard' %}" class="hover:text-red-800 transition-colors">Dashboard</a>
+        <span>/</span>
+        <span class="text-slate-700">Borrow Book</span>
+    </nav>
+
+    <!-- Confirmation Card -->
+    <div class="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+        <!-- Header -->
+        <div class="bg-slate-900 px-6 py-4">
+            <h2 class="text-xl font-bold text-white">Confirm Borrowing</h2>
+            <p class="text-slate-400 text-sm mt-1">Please review the details below</p>
+        </div>
+
+        <!-- Blood accent bar -->
+        <div class="h-1 bg-gradient-to-r from-red-800 via-red-600 to-red-800"></div>
+
+        <!-- Book Info -->
+        <div class="p-6 space-y-4">
+            <div class="bg-slate-50 rounded-xl p-4 space-y-3">
+                <h3 class="text-lg font-semibold text-slate-900">{{ book.title }}</h3>
+
+                <div class="grid grid-cols-2 gap-3 text-sm">
+                    <div>
+                        <span class="text-slate-500">Author</span>
+                        <p class="font-medium text-slate-800">{{ book.author }}</p>
+                    </div>
+                    <div>
+                        <span class="text-slate-500">ISBN</span>
+                        <p class="font-medium text-slate-800 font-mono">{{ book.isbn }}</p>
+                    </div>
+                    <div>
+                        <span class="text-slate-500">Category</span>
+                        <p class="font-medium text-slate-800">{{ book.category.name|default:"Uncategorized" }}</p>
+                    </div>
+                    <div>
+                        <span class="text-slate-500">Status</span>
+                        {% if book.status == 'available' %}
+                            <p class="font-medium text-green-700">✓ Available</p>
+                        {% else %}
+                            <p class="font-medium text-red-700">✗ Not Available</p>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+
+            <!-- Loan Terms -->
+            <div class="bg-blue-50 border border-blue-200 rounded-xl p-4">
+                <p class="text-sm text-blue-800">
+                    <strong>Loan Duration:</strong> 14 days from today.
+                    Please return the book before the due date.
+                </p>
+            </div>
+
+            {% if book.status == 'available' %}
+                <!--
+                    CSRF Protection (CWE-352):
+                    This form includes {% csrf_token %} which generates a hidden field.
+                    The CsrfViewMiddleware verifies this token before processing the POST.
+                    Without a valid CSRF token, the server returns 403 Forbidden.
+                -->
+                <form method="post" id="borrow-form">
+                    {% csrf_token %}
+                    <div class="flex gap-3">
+                        <button type="submit"
+                                id="confirm-borrow-btn"
+                                class="flex-1 px-4 py-3 bg-red-800 text-white font-semibold rounded-lg
+                                       hover:bg-red-900 active:bg-red-950 transition-all duration-200
+                                       focus:ring-2 focus:ring-red-700/50 focus:outline-none">
+                            ✓ Confirm Borrow
+                        </button>
+                        <a href="{% url 'main:member_dashboard' %}"
+                           class="px-6 py-3 bg-slate-200 text-slate-700 font-medium rounded-lg
+                                  hover:bg-slate-300 transition-colors text-center">
+                            Cancel
+                        </a>
+                    </div>
+                </form>
+            {% else %}
+                <div class="px-4 py-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm">
+                    This book is currently not available for borrowing.
+                </div>
+                <a href="{% url 'main:member_dashboard' %}"
+                   class="block text-center px-4 py-3 bg-slate-200 text-slate-700 font-medium rounded-lg
+                          hover:bg-slate-300 transition-colors">
+                    ← Back to Dashboard
+                </a>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endblock %}

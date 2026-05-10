@@ -1,0 +1,68 @@
+{% extends 'main/base.html' %}
+
+{% block title %}하자메 eLibrary{% endblock %}
+
+{% block content %}
+<section class="landing-hero reveal">
+    <div class="hero-grid">
+        <div class="reveal">
+            <span class="hero-kicker">하자메 eLibrary</span>
+            <h1 class="hero-title">하자메, secured like a vault.</h1>
+            <p class="hero-lede">
+                A curated archive designed around safe access, verified transactions, and resilient lending.
+                Built to keep readers moving and threats locked out.
+            </p>
+            <div class="hero-actions">
+                <a class="btn-primary" href="{% url 'main:book_list' %}">Explore the Catalog</a>
+                <a class="btn-secondary" href="{% url 'main:search_books' %}">Search a Title</a>
+            </div>
+            <div class="hero-stats">
+                <div class="stat-card reveal delay-1">
+                    <div class="stat-label">Collection</div>
+                    <div class="stat-value">{{ total_books }}</div>
+                </div>
+                <div class="stat-card reveal delay-2">
+                    <div class="stat-label">Available</div>
+                    <div class="stat-value">{{ total_available }}</div>
+                </div>
+                <div class="stat-card reveal delay-3">
+                    <div class="stat-label">Categories</div>
+                    <div class="stat-value">{{ total_categories }}</div>
+                </div>
+            </div>
+        </div>
+        <div class="hero-panel reveal delay-1">
+            <div class="panel-header">Active protection</div>
+            <div class="panel-metric">{{ total_active_borrows }} live borrows</div>
+            <div class="panel-list">
+                <div class="status-pill success">CSRF defense always on</div>
+                <div class="status-pill success">SQLi-safe search queries</div>
+                <div class="status-pill success">Role-based access guardrails</div>
+                <div class="status-pill error">Auto-lockout on brute force</div>
+            </div>
+        </div>
+    </div>
+</section>
+
+
+<section class="cta-band reveal">
+    <div>
+        <h3 class="cta-title">Start your secure reading ritual.</h3>
+        <p class="section-lede">Jump into the catalog or sign in to manage your library tasks.</p>
+    </div>
+    <div class="cta-actions">
+        {% if user.is_authenticated %}
+            {% if user.role == 'member' %}
+                <a class="btn-primary" href="{% url 'main:member_dashboard' %}">Go to Dashboard</a>
+            {% elif user.role == 'librarian' %}
+                <a class="btn-primary" href="{% url 'main:librarian_dashboard' %}">Open Librarian Hub</a>
+            {% else %}
+                <a class="btn-primary" href="{% url 'main:admin_dashboard' %}">Open Admin Hub</a>
+            {% endif %}
+        {% else %}
+            <a class="btn-primary" href="{% url 'main:login' %}">Sign In</a>
+            <a class="btn-secondary" href="{% url 'main:register' %}">Create Account</a>
+        {% endif %}
+    </div>
+</section>
+{% endblock %}
