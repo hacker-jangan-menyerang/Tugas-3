@@ -549,9 +549,7 @@ python manage.py test main.tests.AdminFeatureTests.test_tc_admin_01_member_block
 
 ## 6. Link Video Demo
 
-> **Status: akan diperbarui setelah perekaman**
-
-YouTube (Unlisted): *[link akan ditambahkan setelah perekaman]*
+YouTube (Unlisted): [https://youtu.be/C7Hx3mI3DoA](https://youtu.be/C7Hx3mI3DoA)
 
 ---
 
