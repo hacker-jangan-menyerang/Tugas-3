@@ -611,35 +611,30 @@ class AuthenticationTests(TestCase):
         get_response = self.client.get('/login/')
         csrf_token = self.client.cookies.get('csrftoken').value
 
-        # Attempt 5 failed logins
-        for i in range(5):
+        # Repeatedly submit wrong credentials. django-axes locks the account once
+        # the failure limit (AXES_FAILURE_LIMIT = 5) is reached. Each attempt must
+        # be rejected: before lockout the view redirects (302, Post/Redirect/Get)
+        # back to /login/; once locked, django-axes returns HTTP 429. No attempt
+        # may ever authenticate (a 302 to a role dashboard or a 200 logged-in page).
+        statuses = []
+        for i in range(7):
             response = self.client.post('/login/', {
                 'username': 'authtest',
                 'password': 'wrongpassword',
                 'csrfmiddlewaretoken': csrf_token
             })
-            # All should fail (not redirect)
-            self.assertNotEqual(response.status_code, 302,
-                f"Attempt {i+1}/5: Login should fail, not redirect")
+            statuses.append(response.status_code)
+            self.assertIn(response.status_code, (302, 429),
+                f"Attempt {i+1}: login must be rejected (302 retry or 429 lockout), "
+                f"got {response.status_code}")
+            if response.status_code == 302:
+                self.assertIn('/login/', response.url,
+                    f"Attempt {i+1}: failed login must return to login, not a dashboard")
 
-        # 6th attempt should be locked out
-        response = self.client.post('/login/', {
-            'username': 'authtest',
-            'password': 'wrongpassword',
-            'csrfmiddlewaretoken': csrf_token
-        })
-
-        # Should NOT redirect to success (locked out)
-        self.assertNotEqual(response.status_code, 302,
-            "6th attempt should be locked out, not succeeding")
-
-        # Check the response contains lockout message
-        content = response.content.decode('utf-8')
-
-        # The system correctly rejected the 6th attempt (either locked OR still showing attempts)
-        has_rejection = 'invalid' in content.lower() or 'locked' in content.lower()
-        self.assertTrue(has_rejection,
-            f"Login should be rejected after 5 failures. Content snippet: {content[:300]}")
+        # The lockout control must engage during the repeated failures.
+        self.assertIn(429, statuses,
+            f"After repeated failures django-axes must lock the account (HTTP 429). "
+            f"Status sequence was: {statuses}")
 
     def test_tc_auth_02_password_is_pbkdf2_hash(self):
         """
@@ -798,14 +793,14 @@ class RoleRequiredDecoratorTests(TestCase):
 
     def test_member_cannot_access_librarian_view(self):
         """Member with @role_required('librarian') → 403."""
-        self.client.login(username='decomember', password='testpass123')
+        self.client.force_login(self.member)
         response = self.client.get('/member/')  # Member dashboard is member-only
         # Member can access member dashboard
         self.assertEqual(response.status_code, 200)
 
     def test_librarian_cannot_access_member_only_view(self):
         """Librarian accessing member-only endpoint → 403."""
-        self.client.login(username='decolibrarian', password='testpass123')
+        self.client.force_login(self.librarian)
         # Librarian accessing member dashboard should be forbidden
         response = self.client.get('/member/')
         self.assertEqual(response.status_code, 403,
