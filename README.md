@@ -553,6 +553,129 @@ YouTube (Unlisted): [https://youtu.be/C7Hx3mI3DoA](https://youtu.be/C7Hx3mI3DoA)
 
 ---
 
+## 7. Laporan Unit Testing
+
+Unit testing menggunakan framework bawaan Django (`django.test.TestCase`), dijalankan dengan:
+
+```bash
+python manage.py test main --verbosity=2
+```
+
+Total **53 test** lulus dengan hasil **OK (0 failure, 0 error)**:
+
+![Seluruh unit test PASS](assets/images/unittest_pass.png)
+
+Subbab berikut menjelaskan test per topik keamanan (penomoran mengikuti Bagian 2).
+
+### 7.1 Code Injection Prevention (CWE-79 / 20 / 94) — Roberto Eugenio Sugiarto (2406355640)
+
+> _TODO: jelaskan `XSSPreventionTests`, `InputValidationTests`, `FileUploadSecurityTests`._
+
+### 7.2 Broken Authentication Mitigation (CWE-287 / 307 / 256 / 384) — Kevin Cornellius Widjaja (2406428781)
+
+> _TODO: jelaskan `AuthenticationTests`, `RegisterFormTests`, `RoleRequiredDecoratorTests`._
+
+### 7.3 CSRF & IDOR Protection (CWE-352 / 639) — Benedictus Lucky Win Ziraluo (2406355174)
+
+> _TODO: jelaskan `CSRFProtectionTests`, `IDORPreventionTests`._
+
+### 7.4 SQL Injection Prevention (CWE-89) — Vincent Valentino Oei (2406353225)
+
+**Diuji:** view `search_books` ([`main/search_views.py`](main/search_views.py)) dan alur login ([`main/auth_views.py`](main/auth_views.py), [`main/forms.py`](main/forms.py)). **Test:** [`main/tests.py`](main/tests.py), 8 test, semua PASS.
+
+Semua query database memakai Django ORM (parameterized query), sehingga payload injeksi hanya dianggap teks biasa (mitigasi CWE-89). Sebagai lapisan kedua, form login membatasi username dengan allowlist `^[a-zA-Z0-9_]+$`.
+
+| Kelas Test | Yang diuji | Hasil |
+|-----------|-----------|-------|
+| `SQLInjectionSearchTests` | Payload `' OR '1'='1'--`, `'; DROP TABLE book;--`, dan `UNION SELECT` pada pencarian | Payload jadi teks biasa, hasil 0, tabel utuh, tidak ada data bocor |
+| `SQLInjectionLoginTests` | Username `admin'--` dll. pada form login | Ditolak validasi, login gagal |
+| `SQLInjectionModelTests` | Inspeksi kode search view | Tanpa `cursor.execute`, memakai `Q()` ORM |
+
+### 7.5 Privilege Escalation Mitigation (CWE-269 / 285 / 862) — Galih Nur Rizqy (2406343224)
+
+> _TODO: jelaskan `AdminFeatureTests`, `RoleAccessTests`, `LibrarianRBACTests`._
+
+---
+
+## 8. Laporan Pentesting
+
+Pentesting dilakukan dalam 5 tahapan sesuai ketentuan tugas. Target uji: aplikasi yang berjalan di `http://127.0.0.1:8000/`.
+
+### 8.1 Reconnaissance (Passive & Active) — Vincent Valentino Oei (2406353225)
+
+Tools: nmap, curl, OWASP ZAP. Target: `http://127.0.0.1:8000/`.
+
+**Teknologi aplikasi:** Django (dev server WSGIServer, Python 3.12), database SQLite, rate limiting django-axes, frontend Tailwind CSS via CDN, password hashing PBKDF2.
+
+**Daftar endpoint** (ringkasan dari [Bagian 1](#1-deskripsi-aplikasi)):
+
+- Publik dan Member: `/register/`, `/login/`, `/logout/`, `/books/`, `/books/search/`, `/books/<id>/`, `/member/borrow/<id>/`, `/member/return/<id>/`, `/member/history/`, `/member/read/<id>/`
+- Librarian: `/librarian/`, `/librarian/books/`, `/librarian/categories/`, `/librarian/report/`
+- Admin: `/admin-panel/`, `/admin-panel/users/`, `/admin-panel/users/<id>/role/`, `/admin-panel/audit-log/`, `/admin-panel/lockouts/`
+
+**nmap** (`nmap -sV -p 8000 -A 127.0.0.1`): port 8000 terbuka, server `WSGIServer/0.2 CPython/3.12.10` (versi bocor).
+
+![Hasil nmap](assets/images/nmap_scan.png)
+
+**curl** (`curl -I`): header `X-Frame-Options`, `X-Content-Type-Options`, `Referrer-Policy`, dan COOP sudah ada; CSP dan HSTS belum ada.
+
+![Hasil curl -I](assets/images/curl_result.png)
+
+**OWASP ZAP** (passive scan): 10 alert, yaitu 0 High, 2 Medium (CSP dan SRI tidak diset), 4 Low, 4 Info. Laporan lengkap: [`assets/zap_report.html`](assets/zap_report.html).
+
+![ZAP alerts](assets/images/zap_alerts.png)
+
+Kesimpulan: tidak ada temuan High. Isu utama yaitu CSP dan HSTS belum diset serta server version disclosure (melengkapi config bug Bagian 8.4).
+
+### 8.2 Threat Modeling
+
+> _TODO (Benedictus): data-flow diagram + tabel ancaman STRIDE per halaman dan pemetaan ke CWE._
+
+### 8.3 Scanning & Enumeration
+
+> _TODO: hasil scan otomatis/manual (mis. ZAP) untuk SQLi, Broken Authentication, CSRF, dan Code Injection._
+
+### 8.4 Exploitation & Testing
+
+Setiap pemilik topik mendemonstrasikan serangan pada fiturnya langsung di browser dan menunjukkan bahwa serangan gagal/diblokir.
+
+#### SQL Injection (CWE-89) — Vincent Valentino Oei (2406353225)
+
+Empat payload SQL injection diuji langsung melalui endpoint pencarian (`/books/search/`) dan form login. Semua gagal karena aplikasi memperlakukan payload sebagai teks biasa (memakai Django ORM, parameterized query).
+
+**1. Boolean-based, `' OR '1'='1'--`:** pencarian mengembalikan 0 hasil, bukan seluruh tabel.
+
+![SQLi boolean-based OR 1=1](assets/images/sqli_pentest_1.png)
+
+**2. Stacked query / DROP TABLE, `'; DROP TABLE books;--`:** 0 hasil, tanpa error, dan tabel tetap utuh (DROP tidak dieksekusi).
+
+![SQLi DROP TABLE](assets/images/sqli_pentest_2.png)
+
+**3. UNION-based, `' UNION SELECT username,password FROM users--`:** 0 hasil, tidak ada username atau password yang bocor.
+
+![SQLi UNION-based](assets/images/sqli_pentest_3.png)
+
+**4. Authentication bypass, login username `admin'--`:** login gagal. Username ditolak allowlist regex pada form login dan tidak pernah mencapai database (terverifikasi pada unit test TC-SQLI-02, lihat Bagian 7.4).
+
+**Temuan (F-SQLI):**
+
+| ID | Serangan | CWE | Status | Bukti |
+|----|----------|-----|--------|-------|
+| F-SQLI-01 | Boolean-based injection (`' OR '1'='1'--`) pada search | CWE-89 | Aman, 0 hasil | `sqli_pentest_1.png` |
+| F-SQLI-02 | Stacked query `DROP TABLE` pada search | CWE-89 | Aman, tabel utuh | `sqli_pentest_2.png` |
+| F-SQLI-03 | UNION-based data exfiltration pada search | CWE-89 | Aman, tidak ada data bocor | `sqli_pentest_3.png` |
+| F-SQLI-04 | Auth bypass login `admin'--` | CWE-89 | Aman, ditolak validasi/ORM | Unit test TC-SQLI-02 (Bagian 7.4) |
+
+Kesimpulan: tidak ditemukan kerentanan SQL injection. Seluruh input dieksekusi melalui Django ORM, diperkuat validasi input allowlist pada form login.
+
+> _TODO: Broken Authentication (Kevin), CSRF & IDOR (Benedictus), Code Injection / XSS (Roberto), Privilege Escalation & config bugs (Galih)._
+
+### 8.5 Reporting & Remediation
+
+> _TODO (Roberto): tabel temuan gabungan (`F-*`) dari semua topik + saran perbaikan untuk bug yang nyata._
+
+---
+
 ## Appendix
 
 ### Entity Relationship Diagram (ERD)
