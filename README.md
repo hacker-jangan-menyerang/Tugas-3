@@ -577,7 +577,17 @@ Subbab berikut menjelaskan test per topik keamanan (penomoran mengikuti Bagian 2
 
 ### 7.3 CSRF & IDOR Protection (CWE-352 / 639) — Benedictus Lucky Win Ziraluo (2406355174)
 
-> _TODO: jelaskan `CSRFProtectionTests`, `IDORPreventionTests`._
+**Diuji:** proteksi CSRF pada endpoint borrow/return dan pencegahan IDOR pada return/history. **Test:** `CSRFProtectionTests` dan `IDORPreventionTests` di `main/tests.py`, semua PASS.
+
+**Ringkas hasil uji:**
+
+| Kelas Test | Yang diuji | Hasil |
+|-----------|-----------|-------|
+| `CSRFProtectionTests` | POST tanpa token dan token salah pada `/member/borrow/<id>/` dan `/member/return/<id>/` | 403 Forbidden; token valid berhasil (borrow sukses, redirect) |
+| `IDORPreventionTests` | Return transaksi milik member lain + history | Return milik member lain 404; history hanya menampilkan transaksi milik sendiri |
+
+![CSRFProtectionTests PASS](assets/images/csrfprotectiontest.png)
+![IDORPreventionTests PASS](assets/images/idorpreventiontest.png)
 
 ### 7.4 SQL Injection Prevention (CWE-89) — Vincent Valentino Oei (2406353225)
 
@@ -629,7 +639,38 @@ Kesimpulan: tidak ada temuan High. Isu utama yaitu CSP dan HSTS belum diset sert
 
 ### 8.2 Threat Modeling
 
-> _TODO (Benedictus): data-flow diagram + tabel ancaman STRIDE per halaman dan pemetaan ke CWE._
+**Data Flow Diagram (DFD):**
+
+```mermaid
+flowchart LR
+    U[User Browser]
+    W[Django Web App]
+    DB[(SQLite Database)]
+    FS[(File Storage)]
+
+    U -- "HTTP(S) request/response (trust boundary)" --> W
+    W -- "ORM queries" --> DB
+    W -- "Upload/download files" --> FS
+    W -- "Set/receive session cookie" --> U
+```
+
+**Trust boundaries:**
+
+- Browser <-> Django app (public network, attacker-controlled client).
+- Django app <-> Database/File storage (internal server boundary).
+
+**STRIDE per halaman/fitur (pemetaan ke CWE):**
+
+| Halaman/Fitur | STRIDE | CWE | Contoh ancaman |
+|--------------|--------|-----|----------------|
+| Login (`/login/`) | Spoofing | CWE-287 | Kredensial ditebak/credential stuffing untuk menyamar sebagai user lain |
+| Login (`/login/`) | DoS | CWE-307 | Brute force berulang menyebabkan lockout atau gangguan layanan |
+| Register (`/register/`) | Elevation | CWE-269 | Tampering parameter role untuk mendaftar sebagai admin/librarian |
+| Search (`/books/search/`) | Tampering / Info Disclosure | CWE-89 | SQL injection untuk membaca data sensitif |
+| Borrow/Return (`/member/borrow/<id>/`, `/member/return/<id>/`) | Tampering | CWE-352 | CSRF memaksa user meminjam/return tanpa consent |
+| Borrow/Return (`/member/return/<id>/`, `/member/history/`) | Info Disclosure / Elevation | CWE-639 | IDOR akses transaksi milik member lain |
+| Librarian book/category forms (`/librarian/books/`, `/librarian/categories/`) | Tampering | CWE-79, CWE-20 | XSS atau input berbahaya pada judul/kategori |
+| Admin/Librarian pages (`/admin-panel/`, `/librarian/`) | Elevation | CWE-285 | Akses halaman privileged tanpa otorisasi |
 
 ### 8.3 Scanning & Enumeration
 
@@ -668,7 +709,31 @@ Empat payload SQL injection diuji langsung melalui endpoint pencarian (`/books/s
 
 Kesimpulan: tidak ditemukan kerentanan SQL injection. Seluruh input dieksekusi melalui Django ORM, diperkuat validasi input allowlist pada form login.
 
-> _TODO: Broken Authentication (Kevin), CSRF & IDOR (Benedictus), Code Injection / XSS (Roberto), Privilege Escalation & config bugs (Galih)._
+#### CSRF & IDOR (CWE-352 / 639) — Benedictus Lucky Win Ziraluo (2406355174)
+
+CSRF diuji dengan request POST manual saat login member; request tanpa token dan token salah ditolak (403). IDOR diuji dengan mencoba return transaksi milik member lain dan menghasilkan 404.
+
+**1. CSRF token missing:** POST `/member/borrow/<id>/` tanpa token -> 403 Forbidden.
+
+![CSRF token missing](assets/images/csrftokenmissing.png)
+
+**2. CSRF token invalid:** POST `/member/borrow/<id>/` dengan token salah -> 403 Forbidden.
+
+![CSRF token invalid](assets/images/csrftokeninvalid.png)
+
+**3. IDOR return milik member lain:** Member A mengakses `/member/return/<id>/` milik Member B -> 404 Not Found.
+
+![IDOR return blocked](assets/images/idortest.png)
+
+**Temuan (F-CSRF):**
+
+| ID | Serangan | CWE | Status | Bukti |
+|----|----------|-----|--------|-------|
+| F-CSRF-01 | CSRF token missing pada borrow | CWE-352 | Aman, 403 | `csrftokenmissing.png` |
+| F-CSRF-02 | CSRF token invalid pada borrow | CWE-352 | Aman, 403 | `csrftokeninvalid.png` |
+| F-CSRF-03 | IDOR return milik member lain | CWE-639 | Aman, 404 | `idortest.png` |
+
+> _TODO: Broken Authentication (Kevin), Code Injection / XSS (Roberto), Privilege Escalation & config bugs (Galih)._
 
 ### 8.5 Reporting & Remediation
 
