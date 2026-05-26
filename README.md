@@ -569,7 +569,22 @@ Subbab berikut menjelaskan test per topik keamanan (penomoran mengikuti Bagian 2
 
 ### 7.1 Code Injection Prevention (CWE-79 / 20 / 94) — Roberto Eugenio Sugiarto (2406355640)
 
-> _TODO: jelaskan `XSSPreventionTests`, `InputValidationTests`, `FileUploadSecurityTests`._
+Pengujian mitigasi injeksi kode dilakukan pada berkas `main/tests.py` melalui tiga kelas pengujian utama, yaitu `XSSPreventionTests`, `InputValidationTests`, dan `FileUploadSecurityTests`.
+
+**Kelas `XSSPreventionTests`**
+- `test_tc_xss_01_script_tag_in_book_title`: Memvalidasi pengiriman data untuk menambah buku yang mengandung karakter berbahaya. Sistem dipastikan menolak formulir tersebut guna memverifikasi daftar pola yang diperbolehkan pada atribut judul.
+- `test_tc_xss_02_xss_in_category_name`: Berkaitan dengan penyimpanan kategori dengan payload berbahaya, memastikan sistem menolak injeksi script.
+- `test_xss_in_description_stripped`: Mengonfirmasi bahwa pengguna yang mengunggah deskripsi dengan teks beralamat HTML akan tetap aman karena tag tersebut dibersihkan di sisi server sebelum tersimpan di basis data.
+- `test_auto_escaping_in_template`: Membuat data teks dengan perintah kerentanan secara langsung di basis data dan memastikan sistem menampilkan tulisan asli tanpa mengeksekusinya di laman pengguna.
+
+**Kelas `InputValidationTests`**
+- `test_tc_input_01_missing_required_fields`: Menolak pengiriman form penambahan buku bilamana kolom wajib tidak diisi.
+- `test_isbn_only_numbers_and_hyphens`: Menjamin ISBN tidak menerima sembarang karakter dan hanya menyetuji angka beserta tanda hubung.
+
+**Kelas `FileUploadSecurityTests`**
+- `test_tc_file_01_exe_disguised_as_pdf`: Memastikan bahwa berkas biner eksekusi dengan nama yang diubah menjadi PDF akan dihentikan sistem berdasarkan pemeriksaan tipe berkas secara menyeluruh.
+- `test_exe_extension_rejected`: Menolak format aplikasi tak dikenal secara langsung sejak validasi esktensi tahap awal.
+- `test_valid_pdf_accepted`: Menyelesaikan rangkaian uji dengan mengizinkan dokumen sah agar berhasil masuk ke aplikasi tanpa memunculkan galat.
 
 ### 7.2 Broken Authentication Mitigation (CWE-287 / 307 / 256 / 384) — Kevin Cornellius Widjaja (2406428781)
 
@@ -669,6 +684,35 @@ Empat payload SQL injection diuji langsung melalui endpoint pencarian (`/books/s
 Kesimpulan: tidak ditemukan kerentanan SQL injection. Seluruh input dieksekusi melalui Django ORM, diperkuat validasi input allowlist pada form login.
 
 > _TODO: Broken Authentication (Kevin), CSRF & IDOR (Benedictus), Code Injection / XSS (Roberto), Privilege Escalation & config bugs (Galih)._
+
+#### Code Injection / XSS (CWE-79 / 20 / 94) — Roberto Eugenio Sugiarto (2406355640)
+
+Pengujian injeksi kode dieksekusi dengan login sebagai *librarian* dan mengisi formulir penambahan dengan payload kerentanan yang umum diuji. Semua form menolak penyimpanan data karena penerapan Regex validator dan pemeriksaan jenis berkas *file* secara kaku.
+
+**1. Stored XSS pada Judul:** form gagal melewati barikade validasi karena regex menolak rangkaian pola huruf tidak diizinkan.
+
+![Bukti Error XSS-01](assets/images/xss_pentest_1.png)
+
+**2. Stored XSS pada Deskripsi:** deskripsi akan otomatis melakukan stripping tag HTML.
+
+![Bukti Error XSS-02a](assets/images/xss_pentest_2a.png)
+![Bukti Error XSS-02b](assets/images/xss_pentest_2b.png)
+
+**3. Injeksi Kode Eksekusi, Unggah File Executable:** sistem memeriksa tipe *file* yang diunggah dan menolak ekstensi yang terlarang atau samaran isi palsu (MIME type).
+
+![Bukti Error File XSS-03a](assets/images/xss_pentest_3a.png)
+![Bukti Error File XSS-03b](assets/images/xss_pentest_3b.png)
+![Bukti Error File XSS-03c](assets/images/xss_pentest_3c.png)
+
+**Temuan (F-XSS):**
+
+| ID | Serangan | CWE | Status | Bukti |
+|----|----------|-----|--------|-------|
+| F-XSS-01 | Stored XSS judul buku `<script>alert(1)</script>` | CWE-79 | Aman, ditolak validator | `xss_pentest_1.png` |
+| F-XSS-02 | Stored XSS pada deskripsi dibersihkan | CWE-79 | Aman, tag HTML di-strip | `xss_pentest_2a.png`, `xss_pentest_2b.png` |
+| F-XSS-03 | Injeksi shell lampiran e-book format `.exe` | CWE-94 | Aman, validasi ekstensi menggagalkan proses | `xss_pentest_3a.png`, dst |
+
+Kesimpulan: Tidak ditemui celah *Cross-Site Scripting* (XSS) maupun Injeksi Kode via pengisian entri form. Aplikasi telah menangkis ragam *tag* berbahaya melewati sistem pertahanan eksternal form (Form Validation Regex, Validator Berkas).
 
 ### 8.5 Reporting & Remediation
 
