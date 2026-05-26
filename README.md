@@ -575,6 +575,8 @@ Subbab berikut menjelaskan test per topik keamanan (penomoran mengikuti Bagian 2
 
 **Diuji:** alur login & logout ([`main/auth_views.py`](main/auth_views.py)), registrasi ([`main/auth_views.py`](main/auth_views.py), [`main/forms.py`](main/forms.py)), dan dekorator RBAC ([`main/decorators.py`](main/decorators.py)). **Test:** [`main/tests.py`](main/tests.py), 9 test, semua PASS.
 
+[Screenshot hasil test AuthenticationTests](assets/images/auth_unittest_pass.png)
+
 #### `AuthenticationTests` — Rate Limiting, PBKDF2, Session Invalidation
 
 Kelas ini memverifikasi tiga kontrol keamanan inti pada alur autentikasi (CWE-287 / 307 / 256 / 384):
@@ -738,7 +740,7 @@ Username `member1` digunakan dengan password salah secara berulang melalui form 
 
 Konfigurasi: `AXES_FAILURE_LIMIT = 5`, `AXES_COOLOFF_TIME = timedelta(minutes=15)`.
 
-![Login lockout setelah 5 kali gagal](assets/images/auth_pentest_lockout.png)
+![Login lockout setelah 5 kali gagal](assets/images/auth_login_locked.png)
 
 **2. Cek kolom password di database — PBKDF2 hash (TC-AUTH-02)**
 
@@ -749,21 +751,23 @@ librarian1 | pbkdf2_sha256$1200000$<salt>$<hash>
 ```
 Tidak ada satu pun akun yang menyimpan password dalam bentuk plaintext. Django secara otomatis menggunakan PBKDF2-SHA256 dengan 1.200.000 iterasi melalui `create_user()`.
 
-![Password hash di DB — bukan plaintext](assets/images/auth_pentest_hash.png)
+![Password hash di DB — bukan plaintext](assets/images/auth_pbkdf_hashed.png)
 
 **3. Reuse session cookie setelah logout (TC-AUTH-03)**
 
 Prosedur: (a) login sebagai `member1`, catat nilai cookie `sessionid` dari DevTools; (b) klik Logout; (c) buka tab Incognito, set cookie `sessionid` ke nilai lama, akses `/member/`. Hasilnya: browser di-redirect ke `/login/` — session lama tidak dikenali server karena `logout()` memanggil `session.flush()` yang menghapus data sesi dari store.
 
-![Session lama tidak valid setelah logout](assets/images/auth_pentest_session.png)
+Implementasi `session.flush()` pada logout view:
+
+![Kode logout — session.flush() menginvalidasi session](assets/images/auth_logout_code.png)
 
 **Temuan (F-AUTH):**
 
 | ID | Serangan | CWE | Severity | Status | Bukti | Rekomendasi |
 |----|----------|-----|----------|--------|-------|-------------|
-| F-AUTH-01 | Brute-force login (> 5 percobaan gagal) | CWE-307 | High | **Aman** — HTTP 429 setelah 5 gagal | `auth_pentest_lockout.png`, TC-AUTH-01 | Konfigurasi sudah tepat; pertimbangkan notifikasi email kepada pemilik akun saat lockout |
-| F-AUTH-02 | Password disimpan plaintext di database | CWE-256 | Critical | **Aman** — PBKDF2-SHA256 1.2M iterasi | `auth_pentest_hash.png`, TC-AUTH-02 | Tidak ada tindakan lanjut; sudah best-practice |
-| F-AUTH-03 | Reuse session token setelah logout (session fixation) | CWE-384 | High | **Aman** — session lama diinvalidasi | `auth_pentest_session.png`, TC-AUTH-03 | Sudah aman; tambahkan `SESSION_COOKIE_SECURE = True` saat deploy ke HTTPS |
+| F-AUTH-01 | Brute-force login (> 5 percobaan gagal) | CWE-307 | High | **Aman** — HTTP 429 setelah 5 gagal | `auth_login_locked.png`, TC-AUTH-01 | Konfigurasi sudah tepat; pertimbangkan notifikasi email kepada pemilik akun saat lockout |
+| F-AUTH-02 | Password disimpan plaintext di database | CWE-256 | Critical | **Aman** — PBKDF2-SHA256 1.2M iterasi | `auth_pbkdf_hashed.png`, TC-AUTH-02 | Tidak ada tindakan lanjut; sudah best-practice |
+| F-AUTH-03 | Reuse session token setelah logout (session fixation) | CWE-384 | High | **Aman** — session lama diinvalidasi | `auth_logout_code.png`, TC-AUTH-03 | Sudah aman; tambahkan `SESSION_COOKIE_SECURE = True` saat deploy ke HTTPS |
 | F-AUTH-04 | Tidak ada pembatasan role pada `/register/` | CWE-287 | Medium | **Rentan** — siapapun bisa daftar sebagai Admin/Librarian | Lihat form registrasi | Batasi pilihan role di `/register/` ke `member` saja; Admin/Librarian dibuat via admin panel |
 
 Kesimpulan: tiga dari empat kontrol autentikasi sudah terimplementasi dengan baik. Satu temuan nyata (F-AUTH-04): form registrasi mengekspos semua pilihan role — pada sistem produksi harus dibatasi ke `member` saja.
