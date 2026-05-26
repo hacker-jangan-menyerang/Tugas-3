@@ -573,7 +573,69 @@ Subbab berikut menjelaskan test per topik keamanan (penomoran mengikuti Bagian 2
 
 ### 7.2 Broken Authentication Mitigation (CWE-287 / 307 / 256 / 384) — Kevin Cornellius Widjaja (2406428781)
 
-> _TODO: jelaskan `AuthenticationTests`, `RegisterFormTests`, `RoleRequiredDecoratorTests`._
+**Diuji:** alur login & logout ([`main/auth_views.py`](main/auth_views.py)), registrasi ([`main/auth_views.py`](main/auth_views.py), [`main/forms.py`](main/forms.py)), dan dekorator RBAC ([`main/decorators.py`](main/decorators.py)). **Test:** [`main/tests.py`](main/tests.py), 9 test, semua PASS.
+
+[Screenshot hasil test AuthenticationTests](assets/images/auth_unittest_pass.png)
+
+#### `AuthenticationTests` — Rate Limiting, PBKDF2, Session Invalidation
+
+Kelas ini memverifikasi tiga kontrol keamanan inti pada alur autentikasi (CWE-287 / 307 / 256 / 384):
+
+| Method | TC-ID | Yang diuji | Cara kerja | Hasil yang diharapkan |
+|--------|-------|------------|------------|----------------------|
+| `test_tc_auth_01_login_lockout_after_5_failures` | TC-AUTH-01 | Rate limiting (CWE-307) | POST `/login/` dengan password salah sebanyak 7 kali; setiap percobaan dicatat oleh `django-axes`. Setelah 5 kali gagal, `axes` memblokir IP dan mengembalikan HTTP 429. | Setidaknya satu respons dalam rangkaian percobaan harus `429`; tidak ada percobaan yang berhasil masuk (bukan `200` dashboard) |
+| `test_tc_auth_02_password_is_pbkdf2_hash` | TC-AUTH-02 | Penyimpanan password (CWE-256) | Membaca field `password` dari objek `User` di DB. Memverifikasi format `pbkdf2_sha256$<iterations>$<salt>$<hash>` (4 segmen dipisah `$`). | `user.password.startswith('pbkdf2_sha256$')` = `True`; nilai bukan plaintext `'testpass123'` |
+| `test_tc_auth_03_session_invalidated_after_logout` | TC-AUTH-03 | Session management (CWE-384) | Login → simpan nilai `sessionid` → POST `/logout/` → buat client baru dengan cookie `sessionid` lama → GET `/member/`. | Respons adalah `302` ke `/login/`, bukan `200` (session lama tidak valid) |
+
+Konfigurasi terkait di [`elibrary/settings.py`](elibrary/settings.py):
+```python
+AXES_FAILURE_LIMIT     = 5                       # lockout setelah 5 gagal
+AXES_COOLOFF_TIME      = timedelta(minutes=15)   # durasi lockout
+AXES_RESET_ON_SUCCESS  = True                    # reset counter saat login berhasil
+SESSION_COOKIE_HTTPONLY = True                   # cegah akses JS ke cookie
+SESSION_COOKIE_AGE      = 3600                   # session kedaluwarsa 1 jam
+```
+
+#### `RegisterFormTests` — Validasi Form Registrasi
+
+| Method | Yang diuji | Hasil yang diharapkan |
+|--------|------------|----------------------|
+| `test_register_creates_user_with_role` | POST `/register/` dengan data member valid → user tersimpan ke DB dengan `role='member'` dan `membership_number` sesuai input | `302` redirect ke `/login/`; user ada di DB |
+| `test_register_librarian_requires_employee_id` | POST dengan `role='librarian'` dan `employee_id` valid | `302` success; user tersimpan |
+| `test_password_mismatch_validation` | POST dengan `password='pass123'` dan `password_confirm='differentpass'` | Bukan `302`; kata "password" muncul di halaman (pesan error) |
+
+Form validasi diimplementasikan di [`main/forms.py`](main/forms.py) — method `clean()` membandingkan `password` dan `password_confirm`, melempar `ValidationError` jika tidak cocok.
+
+#### `RoleRequiredDecoratorTests` — RBAC via `@role_required`
+
+| Method | Yang diuji | Hasil yang diharapkan |
+|--------|------------|----------------------|
+| `test_member_cannot_access_librarian_view` | Member GET `/member/` (halaman khusus member) | `200 OK` — member bisa akses halaman role-nya sendiri |
+| `test_librarian_cannot_access_member_only_view` | Librarian GET `/member/` | `403 Forbidden` — dekorator menolak role yang tidak cocok |
+| `test_unauthenticated_access_redirects` | Unauthenticated GET `/member/` | `302` ke `/login/` — dekorator redirect jika belum login |
+
+Dekorator `@role_required(*roles)` di [`main/decorators.py`](main/decorators.py) pertama memeriksa `request.user.is_authenticated`; jika tidak, redirect ke login. Kemudian memeriksa `request.user.role in roles`; jika tidak, mengembalikan `HttpResponseForbidden('403 Forbidden')`.
+
+#### Coverage — `main` module
+
+Dijalankan dengan:
+```bash
+python -m coverage run --source=main manage.py test main
+python -m coverage report -m
+```
+
+Hasil:
+
+| Module | Stmts | Miss | Cover |
+|--------|-------|------|-------|
+| `main/auth_views.py` | 122 | 12 | **90%** |
+| `main/decorators.py` | 14 | 0 | **100%** |
+| `main/forms.py` | 37 | 5 | 86% |
+| `main/models.py` | 71 | 4 | 94% |
+| `main/signals.py` | 25 | 3 | 88% |
+| **TOTAL** | **1410** | **308** | **78%** |
+
+`auth_views.py` mencapai 90% — 12 baris yang tidak tertutup adalah cabang error minor (mis. path redirect saat user sudah login membuka `/login/`). `decorators.py` 100% karena seluruh alur (authenticated + role cocok, authenticated + role salah, unauthenticated) dicakup oleh `RoleRequiredDecoratorTests` dan `RoleAccessTests`.
 
 ### 7.3 CSRF & IDOR Protection (CWE-352 / 639) — Benedictus Lucky Win Ziraluo (2406355174)
 
@@ -733,7 +795,49 @@ CSRF diuji dengan request POST manual saat login member; request tanpa token dan
 | F-CSRF-02 | CSRF token invalid pada borrow | CWE-352 | Aman, 403 | `csrftokeninvalid.png` |
 | F-CSRF-03 | IDOR return milik member lain | CWE-639 | Aman, 404 | `idortest.png` |
 
-> _TODO: Broken Authentication (Kevin), Code Injection / XSS (Roberto), Privilege Escalation & config bugs (Galih)._
+#### Broken Authentication (CWE-287 / 307 / 256 / 384) — Kevin Cornellius Widjaja (2406428781)
+
+Tiga skenario serangan diuji langsung pada aplikasi yang berjalan di `http://127.0.0.1:8000/`.
+
+**1. Brute-force login → Account Lockout (TC-AUTH-01)**
+
+Username `member1` digunakan dengan password salah secara berulang melalui form login `/login/`. Setelah percobaan ke-5, `django-axes` memblokir IP. Percobaan ke-6 mengembalikan halaman dengan pesan lockout (HTTP 429) dan tidak mengizinkan masuk meskipun password benar.
+
+Konfigurasi: `AXES_FAILURE_LIMIT = 5`, `AXES_COOLOFF_TIME = timedelta(minutes=15)`.
+
+![Login lockout setelah 5 kali gagal](assets/images/auth_login_locked.png)
+
+**2. Cek kolom password di database — PBKDF2 hash (TC-AUTH-02)**
+
+Kolom `password` pada tabel `users` diperiksa langsung di `db.sqlite3`. Hasilnya:
+```
+admin      | pbkdf2_sha256$1200000$<salt>$<hash>
+librarian1 | pbkdf2_sha256$1200000$<salt>$<hash>
+```
+Tidak ada satu pun akun yang menyimpan password dalam bentuk plaintext. Django secara otomatis menggunakan PBKDF2-SHA256 dengan 1.200.000 iterasi melalui `create_user()`.
+
+![Password hash di DB — bukan plaintext](assets/images/auth_pbkdf_hashed.png)
+
+**3. Reuse session cookie setelah logout (TC-AUTH-03)**
+
+Prosedur: (a) login sebagai `member1`, catat nilai cookie `sessionid` dari DevTools; (b) klik Logout; (c) buka tab Incognito, set cookie `sessionid` ke nilai lama, akses `/member/`. Hasilnya: browser di-redirect ke `/login/` — session lama tidak dikenali server karena `logout()` memanggil `session.flush()` yang menghapus data sesi dari store.
+
+Implementasi `session.flush()` pada logout view:
+
+![Kode logout — session.flush() menginvalidasi session](assets/images/auth_logout_code.png)
+
+**Temuan (F-AUTH):**
+
+| ID | Serangan | CWE | Severity | Status | Bukti | Rekomendasi |
+|----|----------|-----|----------|--------|-------|-------------|
+| F-AUTH-01 | Brute-force login (> 5 percobaan gagal) | CWE-307 | High | **Aman** — HTTP 429 setelah 5 gagal | `auth_login_locked.png`, TC-AUTH-01 | Konfigurasi sudah tepat; pertimbangkan notifikasi email kepada pemilik akun saat lockout |
+| F-AUTH-02 | Password disimpan plaintext di database | CWE-256 | Critical | **Aman** — PBKDF2-SHA256 1.2M iterasi | `auth_pbkdf_hashed.png`, TC-AUTH-02 | Tidak ada tindakan lanjut; sudah best-practice |
+| F-AUTH-03 | Reuse session token setelah logout (session fixation) | CWE-384 | High | **Aman** — session lama diinvalidasi | `auth_logout_code.png`, TC-AUTH-03 | Sudah aman; tambahkan `SESSION_COOKIE_SECURE = True` saat deploy ke HTTPS |
+| F-AUTH-04 | Tidak ada pembatasan role pada `/register/` | CWE-287 | Medium | **Rentan** — siapapun bisa daftar sebagai Admin/Librarian | Lihat form registrasi | Batasi pilihan role di `/register/` ke `member` saja; Admin/Librarian dibuat via admin panel |
+
+Kesimpulan: tiga dari empat kontrol autentikasi sudah terimplementasi dengan baik. Satu temuan nyata (F-AUTH-04): form registrasi mengekspos semua pilihan role — pada sistem produksi harus dibatasi ke `member` saja.
+
+
 
 ### 8.5 Reporting & Remediation
 
