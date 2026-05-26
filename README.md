@@ -1023,9 +1023,31 @@ Pengujian injeksi kode dieksekusi dengan login sebagai *librarian* dan mengisi f
 
 Kesimpulan: Tidak ditemui celah *Cross-Site Scripting* (XSS) maupun Injeksi Kode via pengisian entri form. Aplikasi telah menangkis ragam *tag* berbahaya melewati sistem pertahanan eksternal form (Form Validation Regex, Validator Berkas).
 
-### 8.5 Reporting & Remediation
+### 8.5 Reporting & Remediation (Gabungan) — Roberto Eugenio Sugiarto (2406355640)
 
-> _TODO (Roberto): tabel temuan gabungan (`F-*`) dari semua topik + saran perbaikan untuk bug yang nyata._
+Tabel berikut merangkum seluruh temuan kerentanan gabungan per skenario keamanan dari semua anggota tim beserta langkah perbaikannya (*How to fix*) untuk *bug-bug* yang benar-benar terpapar secara terpisah:
+
+| ID | Finding | CWE | Severity | Fixed? | Evidence | How to fix |
+|---|---|---|---|---|---|---|
+| F-SQLI-01 | Boolean-based injection (`' OR '1'='1'--`) pada search | CWE-89 | High | Yes | `sqli_pentest_1.png` | Terus pertahankan penggunaan parameterized query via objek Django ORM (`Q`). |
+| F-SQLI-02 | Stacked query `DROP TABLE` pada search | CWE-89 | High | Yes | `sqli_pentest_2.png` | Sama seperti F-SQLI-01, hindari eksekusi SQL mentah. |
+| F-SQLI-03 | UNION-based data exfiltration pada search | CWE-89 | High | Yes | `sqli_pentest_3.png` | Teruskan perlakuan pencegahan melalui Django ORM *objects*. |
+| F-SQLI-04 | Auth bypass parameter login `admin'--` | CWE-89 | High | Yes | Unit test `TC-SQLI-02` | Jangan mencabut perlindungan regex *allowlist* serta proses ORM. |
+| F-CSRF-01 | Pengosongan/kekurangan CSRF token pada sesi peminjaman | CWE-352 | Medium | Yes | `csrftokenmissing.png` | Tetap pertahankan kewajiban keberadaan *middleware* `CsrfViewMiddleware`. |
+| F-CSRF-02 | Eksploitasi CSRF field token yang bersifat invalid | CWE-352 | Medium | Yes | `csrftokeninvalid.png` | Sama kriteria perlindungannya dengan F-CSRF-01. |
+| F-CSRF-03 | Infiltrasi identitas IDOR (memulangkan buku milik member spesifik lain) | CWE-639 | High | Yes | `idortest.png` | Kunci objek kueri transaksi ke otentikasi asli peminjam (`borrower=request.user`). |
+| F-AUTH-01 | Pengguna diguyur *lockout* usai melakukan eksploitasi *Brute-force* | CWE-307 | High | Yes | `auth_login_locked.png` | Tetap berlakukan pengaturan limit modul kontrol pembatasan `django-axes`. |
+| F-AUTH-02 | Pengamanan kata sandi pasca penyimpanan tercacah di DB | CWE-256 | Critical | Yes | `auth_pbkdf_hashed.png` | Pertahankan utilitas hashing algoritma `PBKDF2-SHA256` dari model `create_user()`. |
+| F-AUTH-03 | Penyalahgunaan/ *reuse session cookie* lawas sehabis interaksi *logout* | CWE-384 | High | Yes | `auth_logout_code.png` | Patenkan pengimplementasian metode pembersihan rekaman sisa lewat `session.flush()` di *views*. |
+| **F-AUTH-04** | Halaman *register* memaparkan opsi Role publik dengan bebas | CWE-287 | Medium | **No** | Konfirmasi UI registrasi | **How To Fix**: Sembunyikan *dropdown* peran dari laman otentikasi publik. |
+| F-PRIV-01 | Penjabaran ekses url non-Admin ke Panel Administrasi | CWE-285 | High | Yes | `rbac_1.png` & `rbac_2.png` | Lestarikan penugasan perlindungan lapis *decorator* identifikasi `@role_required()`. |
+| F-PRIV-02 | Pencegalan instrumen mandiri *deactivate/lockout* Administrator | CWE-269 | Medium | Yes | `rbac_3.png` | Validasi selalu pembedaan ID entitas target terhadap kepemilikan sang eksekutor di fungsi internal target. |
+| **F-PRIV-03** | Server disiarkan saat variabel rentan kerahasiaan `DEBUG = True` menguak *Source Code* | CWE-215 | Medium | **No** | `config_bugs_1.png` | **How To Fix**: Alihfungsikan status menjadi `DEBUG = False` di *Production* dan deklarasikan muatan `ALLOWED_HOSTS`. |
+| **F-PRIV-04** | Kemangkiran struktur HTTP *Security Headers (HSTS, CSP, X-Content-Type)* | CWE-693 / 319 | Medium | **No** | `config_bugs_2.png` | **How To Fix**: Suntikkan tambahan pelindung modul `django-csp`, atur keberlakuan HSTS/HTTPS, beserta fungsikan *Secure Cookies*. |
+| **F-PRIV-05** | Ekskalasi posisi otorisasi pendaftaran mandiri (menuju *Admin* / *Librarian*) | CWE-269 | High | **No** | `config_bugs_3.png` & `4` | **How To Fix**: Batasi opsi ke pendaftaran absolut pengguna bernilai kaku `member` saja lewat perlindungan fungsionalitas di *backend*. |
+| F-XSS-01 | Percobaan Stored XSS ekspor sintaks `<script>` di atribut Judul buku | CWE-79 | Low | Yes | `xss_pentest_1.png` | Terapkan validator spesifik Regex guna mendepak muatan kelainan abjad. |
+| F-XSS-02 | Stored XSS disusupi di dalam isian ringkasan *Deskripsi* | CWE-79 | Low | Yes | `xss_pentest_2a.png`, dst. | Pertahankan praktik pembedahan tag HTML *form* lewati intervensi `_strip_html_tags()`. |
+| F-XSS-03 | Upaya penginjeksian *file* berbasis malware (*executable*) di *upload ebooks* | CWE-94 | High | Yes | `xss_pentest_3a.png`, dst. | Selalu jadikan deteksi mendalam MIME-type (`python-magic`) dasar keaslian penolakan sistem unggahan berkas palsu. |
 
 ---
 
