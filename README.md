@@ -569,32 +569,7 @@ Subbab berikut menjelaskan test per topik keamanan (penomoran mengikuti Bagian 2
 
 ### 7.1 Code Injection Prevention (CWE-79 / 20 / 94) — Roberto Eugenio Sugiarto (2406355640)
 
-**Diuji:** form validasi librarian ([`main/librarian_forms.py`](main/librarian_forms.py)) dan template auto-escaping. **Test:** `XSSPreventionTests`, `InputValidationTests`, `FileUploadSecurityTests` di `main/tests.py`, semua PASS.
-
-#### `XSSPreventionTests` — Pencegahan XSS pada Form Librarian
-
-| Method | TC-ID | Yang diuji | Cara kerja | Hasil yang diharapkan |
-|--------|-------|------------|------------|----------------------|
-| `test_tc_xss_01_script_tag_in_book_title` | TC-XSS-01 | Allowlist regex pada title (CWE-79) | POST tambah buku dengan title `<script>alert(1)</script>` | Form ditolak (bukan `302`); tidak ada buku dengan `<script>` di DB |
-| `test_tc_xss_02_xss_in_category_name` | TC-XSS-02 | Allowlist regex pada category name (CWE-79) | POST tambah kategori dengan `<img src=x onerror=alert(1)>` | Form ditolak; tidak ada kategori XSS di DB |
-| `test_xss_in_description_stripped` | — | HTML tag stripping di description (CWE-79) | POST buku dengan description `Hello <script>alert("xss")</script> world` | Jika berhasil tersimpan, `<script>` sudah dihapus; hanya teks `Hello world` tersimpan |
-| `test_auto_escaping_in_template` | — | Django auto-escaping (CWE-79) | Buat buku langsung ke DB dengan title `<script>` → GET halaman daftar buku | Response HTML mengandung `&lt;script&gt;` bukan `<script>` — tag tidak dieksekusi browser |
-
-Dua lapis pertahanan yang diuji: (1) regex allowlist di `BookForm` / `CategoryForm` menolak karakter `<`, `>` sebelum masuk database; (2) jika data berbahaya masuk DB secara langsung, Django auto-escaping memastikan tag dirender sebagai teks, bukan dieksekusi.
-
-#### `InputValidationTests` — Validasi Field Wajib dan Format (CWE-20)
-
-| Method | TC-ID | Yang diuji | Hasil yang diharapkan |
-|--------|-------|------------|----------------------|
-| `test_tc_input_01_missing_required_fields` | TC-INPUT-01 | Field title/author/isbn kosong | Form ditolak; 0 buku dibuat di DB |
-| `test_isbn_only_numbers_and_hyphens` | — | ISBN dengan karakter `ABC-INVALID` | Form ditolak; hanya format `[0-9\-]` diterima |
-
-#### `FileUploadSecurityTests` — Validasi File Upload eBook (CWE-94)
-
-| Method | TC-ID | Yang diuji | Cara kerja | Hasil yang diharapkan |
-|--------|-------|------------|------------|----------------------|
-| `test_tc_file_01_exe_disguised_as_pdf` | TC-FILE-01 | MIME type check (extension ≠ content) | Upload file dengan ekstensi `.pdf` tapi header konten `MZ` (EXE magic bytes) | File ditolak atau disimpan tanpa ekstensi `.exe`; tidak ada file EXE tersimpan di server |
-| `test_exe_extension_rejected` | — | Extension allowlist | Upload file `malware.exe` langsung | Form ditolak — ekstensi `.exe` tidak masuk allowlist `.pdf/.epub/.txt` |
+> _TODO: jelaskan `XSSPreventionTests`, `InputValidationTests`, `FileUploadSecurityTests`._
 
 ### 7.2 Broken Authentication Mitigation (CWE-287 / 307 / 256 / 384) — Kevin Cornellius Widjaja (2406428781)
 
