@@ -1,460 +1,16 @@
-# Digital Library Management System
+# Digital Library Management System — Laporan Tugas 4
 
 **Kelompok: hacker-jangan-menyerang**
 
 ---
 
-## 1. Deskripsi Aplikasi
+## 1. Link Video Demo
 
-### Skenario
-
-Sistem Informasi Perpustakaan Digital (*Digital Library Management System*) adalah aplikasi web berbasis Django yang mensimulasikan manajemen perpustakaan digital. Sistem ini memungkinkan anggota (member) untuk meminjam dan membaca eBook secara online, pustakawan (librarian) untuk mengelola koleksi buku dan kategori, serta admin untuk mengelola pengguna dan memantau aktivitas sistem melalui audit log.
-
-Aplikasi ini dibangun sebagai demonstrasi implementasi *secure coding* pada 4 kelas kerentanan utama: SQL Injection, Broken Authentication, CSRF, dan Code Injection (XSS).
-
-### Fitur yang Diimplementasikan
-
-| Role | Fitur | URL |
-|------|-------|-----|
-| **Member** | Register akun | `/register/` |
-| | Login / Logout | `/login/`, `/logout/` |
-| | Lihat katalog buku | `/books/` |
-| | Cari buku | `/books/search/` |
-| | Lihat detail buku | `/books/<id>/` |
-| | Pinjam eBook | `/member/borrow/<id>/` |
-| | Kembalikan eBook | `/member/return/<id>/` |
-| | Riwayat peminjaman | `/member/history/` |
-| | Baca online | `/member/read/<id>/` |
-| **Librarian** | Dashboard librarian | `/librarian/` |
-| | Kelola buku (add/update/delete soft) | `/librarian/books/` |
-| | Kelola kategori | `/librarian/categories/` |
-| | Generate laporan transaksi | `/librarian/report/` |
-| **Admin** | Dashboard admin | `/admin-panel/` |
-| | Kelola pengguna (create/edit/toggle) | `/admin-panel/users/` |
-| | Ubah role pengguna | `/admin-panel/users/<id>/role/` |
-| | Lihat audit log | `/admin-panel/audit-log/` |
-| | Kelola IP lockout | `/admin-panel/lockouts/` |
-
-> **Catatan akademis:** Halaman `/register/` sengaja mengekspos semua pilihan role (Member, Librarian, Admin) agar dosen/penguji dapat mendaftarkan akun dengan role apapun untuk keperluan pengujian. Pada sistem produksi, pilihan role di form registrasi harus dibatasi ke **Member** saja — akun Librarian dan Admin dibuat oleh Admin melalui `/admin-panel/users/create/`.
-
-### Stack Teknologi
-
-| Komponen | Teknologi |
-|----------|-----------|
-| Framework | Django 4.2 |
-| Database | SQLite (file: `db.sqlite3`) |
-| Rate Limiting | django-axes |
-| Environment | python-dotenv |
-| Frontend | Tailwind CSS via CDN |
-| Auth Hashing | PBKDF2-SHA256 (Django default) |
+YouTube (Unlisted): [https://youtu.be/-giPyfFwNck](https://youtu.be/-giPyfFwNck)
 
 ---
 
-## 2. Implementasi Secure Coding
-
-### 2.1 Code Injection Prevention
-
-**CWE References:** CWE-79 (XSS), CWE-20 (Improper Input Validation), CWE-94 (Code Injection)
-
-#### Vulnerability Description
-
-Code Injection / XSS terjadi ketika input dari user dimasukkan ke dalam response HTML tanpa validasi atau escaping. Attacker dapat menyisipkan tag `<script>` atau karakter berbahaya yang dieksekusi oleh browser korban.
-
-#### Before (Vulnerable)
-
-```python
-# VULNERABLE: Form field menerima input bebas tanpa validasi
-# Attacker bisa input: <script>document.cookie</script>
-title = forms.CharField(max_length=255)  # No validator!
-description = forms.CharField(widget=forms.Textarea())  # Raw HTML accepted
-
-# VULNERABLE template (jika menggunakan |safe):
-# {{ book.title | safe }}  ← script tag akan dieksekusi
-```
-
-#### After (Mitigated)
-
-```python
-# SAFE: Allowlist regex — hanya karakter yang diizinkan
-title = forms.CharField(
-    max_length=255,
-    validators=[
-        RegexValidator(
-            regex=r'^[a-zA-Z0-9\s\-\.,;:!?\'"()&#+@/]+$',
-            message='Title can only contain letters, numbers, and common punctuation.'
-        ),
-    ],
-)
-
-# SAFE: HTML tags di-strip dari description sebelum masuk database
-def clean_description(self):
-    value = self.cleaned_data.get('description', '')
-    return re.sub(r'<[^>]+>', '', value)  # Strip semua HTML/XML tags
-
-# SAFE template (default Django auto-escape — TIDAK pakai |safe):
-# {{ book.title }}  ← <script> dirender sebagai teks, bukan dieksekusi
-```
-
-Sumber kode: [`main/librarian_forms.py`](main/librarian_forms.py)
-
-#### Mitigation Explanation
-
-1. **Allowlist Regex Validation** — setiap field (title, author, ISBN, category name) hanya menerima karakter yang ada dalam whitelist. Karakter seperti `<`, `>`, `"` yang digunakan dalam tag HTML/script tidak termasuk dalam pola yang diizinkan.
-2. **HTML Tag Stripping** — field description diproses melalui `_strip_html_tags()` yang menggunakan `re.sub(r'<[^>]+>', '', value)` untuk menghapus semua tag HTML sebelum data disimpan ke database.
-3. **Django Auto-Escape** — semua template menggunakan Django's default auto-escaping. Karakter `<`, `>`, `&`, `"`, `'` secara otomatis di-escape saat render. Tidak ada penggunaan `|safe` atau `mark_safe()` pada konten yang dikendalikan user di seluruh project.
-4. **File Upload Validation** — file eBook divalidasi berdasarkan ekstensi (allowlist: `.pdf`, `.epub`, `.txt`) DAN MIME type dari file header, bukan hanya nama file.
-
----
-
-### 2.2 Broken Authentication Mitigation
-
-**CWE References:** CWE-287 (Improper Authentication), CWE-307 (Brute Force), CWE-256 (Plaintext Password Storage), CWE-384 (Session Fixation)
-
-#### Rate Limiting Login Attempts
-
-**Lockout:** 15 menit setelah 5 kali percobaan gagal
-
-**Before (Vulnerable — No Rate Limiting):**
-```python
-# VULNERABLE: No protection against brute force
-def login_view(request):
-    user = authenticate(username=username, password=password)
-    if user:
-        login(request, user)
-        return redirect('dashboard')
-    messages.error(request, 'Invalid credentials')
-    # Attacker bisa coba ribuan password tanpa hambatan
-```
-
-**After (Mitigated — Rate Limiting with Lockout):**
-```python
-# SAFE: Rate limiting dengan 5-attempt lockout (15 menit)
-def login_view(request):
-    if _is_locked_out(ip, username):
-        remaining = _get_lockout_remaining_seconds(ip, username)
-        messages.error(request, f'Akun terkunci. Coba lagi dalam {remaining} detik.')
-        return render(request, 'main/login.html', context)
-
-    user = authenticate(request, username=username, password=password)
-    if user:
-        login(request, user)
-        return _redirect_by_role(user)
-
-    # Track failed attempt via django-axes
-    messages.error(request, f'Kredensial tidak valid.')
-```
-
-Konfigurasi di `settings.py`:
-```python
-AXES_FAILURE_LIMIT = 5          # Lockout setelah 5 kali gagal
-AXES_COOLOFF_TIME = timedelta(minutes=15)
-AXES_RESET_ON_SUCCESS = True    # Reset counter setelah login berhasil
-AXES_LOCKOUT_PARAMETERS = ['ip_address']
-```
-
-#### Password Hashing (PBKDF2)
-
-**Before (Vulnerable — Plaintext Storage):**
-```python
-# VULNERABLE: Password disimpan plaintext
-user = User(username=username, password=password)
-user.save()
-```
-
-**After (Mitigated — PBKDF2):**
-```python
-# SAFE: Django's create_user() otomatis hash dengan PBKDF2-SHA256
-user = User.objects.create_user(
-    username=username,
-    password=password  # Disimpan sebagai: pbkdf2_sha256$600000$salt$hash
-)
-```
-
-Verifikasi di database:
-```bash
-sqlite3 db.sqlite3 "SELECT password FROM users WHERE username='admin';"
-# Result: pbkdf2_sha256$600000$<salt>$<hash>  (bukan plaintext)
-```
-
-#### Session Management
-
-**Before (Vulnerable — Session Fixation):**
-```python
-# VULNERABLE: Session ID tidak diperbarui setelah login
-def login_view(request):
-    user = authenticate(username=username, password=password)
-    if user:
-        login(request, user)  # Session ID lama tetap dipakai
-```
-
-**After (Mitigated — Session Flush on Logout):**
-```python
-# SAFE: Session di-flush saat logout — token lama tidak bisa dipakai lagi
-def logout_view(request):
-    if request.user.is_authenticated:
-        logout(request)  # Internally calls session.flush()
-    return redirect('main:login')
-```
-
-Konfigurasi session di `settings.py`:
-```python
-SESSION_COOKIE_HTTPONLY = True     # Cegah akses JavaScript ke cookie
-SESSION_COOKIE_SAMESITE = 'Lax'   # Proteksi CSRF pada cookie
-SESSION_COOKIE_AGE = 3600          # Session kedaluwarsa setelah 1 jam
-```
-
-#### User Role Enforcement (@role_required)
-
-```python
-# main/decorators.py — Least Privilege via RBAC
-def role_required(*roles):
-    def decorator(view_func):
-        @wraps(view_func)
-        def wrapper(request, *args, **kwargs):
-            if not request.user.is_authenticated:
-                return redirect('main:login')
-            if request.user.role not in roles:
-                return HttpResponseForbidden('403 Forbidden')
-            return view_func(request, *args, **kwargs)
-        return wrapper
-    return decorator
-
-# Penggunaan:
-@role_required('librarian')
-def add_book(request): ...
-
-@role_required('admin')
-def user_list(request): ...
-```
-
----
-
-### 2.3 CSRF Protection
-
-**CWE References:** CWE-352 (Cross-Site Request Forgery), CWE-639 (IDOR)
-
-#### Vulnerability Description
-
-CSRF terjadi ketika attacker membuat halaman palsu yang mengirim POST request ke aplikasi atas nama user yang sedang login. Karena browser otomatis menyertakan cookie session, server tidak bisa membedakan request sah dari request palsu tanpa mekanisme token tambahan.
-
-#### 1. CSRF Token pada Semua Form POST
-
-**Before (Vulnerable — Tanpa CSRF Token):**
-```html
-<!-- VULNERABLE: Attacker bisa buat form ini di situs lain -->
-<form method="post" action="/member/borrow/1/">
-    <button type="submit">Borrow Book</button>
-</form>
-```
-
-**After (Secure — Dengan CSRF Token):**
-```html
-<!-- SECURE: Token unik per-session, diverifikasi server -->
-<form method="post" action="/member/borrow/1/">
-    {% csrf_token %}
-    <!-- Renders: <input type="hidden" name="csrfmiddlewaretoken" value="<unique-token>"> -->
-    <button type="submit">Borrow Book</button>
-</form>
-```
-
-Konfigurasi di `settings.py`:
-```python
-MIDDLEWARE = [
-    ...
-    'django.middleware.csrf.CsrfViewMiddleware',  # Verifikasi setiap POST
-    ...
-]
-```
-
-Tidak ada `@csrf_exempt` di seluruh project — semua endpoint POST dilindungi.
-
-#### 2. IDOR Prevention pada Borrow History & Return
-
-**Before (Vulnerable — Tanpa Ownership Check):**
-```python
-# VULNERABLE: Siapapun yang tahu ID bisa return buku orang lain
-def return_book(request, transaction_id):
-    transaction = get_object_or_404(BorrowTransaction, id=transaction_id)
-    transaction.status = 'returned'
-    transaction.save()
-```
-
-**After (Secure — Ownership Check):**
-```python
-# SECURE: Hanya borrower yang bisa return bukunya sendiri
-def return_book(request, transaction_id):
-    transaction = get_object_or_404(
-        BorrowTransaction,
-        id=transaction_id,
-        borrower=request.user  # CRITICAL: cegah IDOR (CWE-639)
-    )
-    transaction.return_date = timezone.now()  # Server-side timestamp
-    transaction.status = 'returned'
-    transaction.save()
-```
-
-#### 3. Server-side Timestamping (Repudiation Mitigation)
-
-```python
-# Semua timestamp diisi server, bukan dari input user
-BorrowTransaction.objects.create(
-    book=book,
-    borrower=request.user,
-    due_date=timezone.now() + timedelta(days=14),  # Server hitung
-    status='borrowed'
-    # borrow_date: auto_now_add=True → diisi Django otomatis
-)
-transaction.return_date = timezone.now()  # Bukan dari request.POST
-```
-
----
-
-### 2.4 SQL Injection Prevention
-
-**CWE References:** CWE-89 (SQL Injection)
-
-#### Vulnerability Description
-
-SQL Injection terjadi ketika input user langsung digabungkan ke dalam query SQL tanpa sanitasi. Attacker dapat memanipulasi query untuk membaca data sensitif, melewati autentikasi, atau menghapus data.
-
-#### Before (Vulnerable)
-
-```python
-# VULNERABLE: String concatenation langsung ke SQL
-query = f"SELECT * FROM books WHERE title LIKE '%{search_term}%'"
-cursor.execute(query)
-# Payload: search_term = "'; DROP TABLE books; --"
-# → Menghapus seluruh tabel!
-
-# VULNERABLE login:
-query = f"SELECT * FROM users WHERE username='{username}' AND password='{password}'"
-# Payload: username = "admin' --"
-# → Bypass autentikasi!
-```
-
-#### After (Mitigated)
-
-```python
-# SAFE: Django ORM dengan Q objects — parameterized queries otomatis
-from django.db.models import Q
-books = Book.objects.filter(
-    Q(title__icontains=query) |
-    Q(author__icontains=query) |
-    Q(isbn__icontains=query),
-    is_deleted=False,
-    status='available'
-)
-# Django ORM menggunakan parameterized queries di belakang layar:
-# WHERE title LIKE %s OR author LIKE %s  (parameter terpisah dari query)
-```
-
-Sumber kode: [`main/search_views.py`](main/search_views.py)
-
-#### Database Least Privilege
-
-Aplikasi menggunakan SQLite single-file database. Koneksi dikelola oleh Django ORM yang hanya mengekspos operasi CRUD melalui model — tidak ada akses DDL langsung dari aplikasi. Django's `DATABASES` setting menggunakan driver `django.db.backends.sqlite3` yang membatasi operasi ke scope aplikasi.
-
----
-
-### 2.5 Privilege Escalation Mitigation
-
-**CWE References:** CWE-269 (Improper Privilege Management), CWE-285 (Improper Authorization), CWE-862 (Missing Authorization)
-
-#### Vulnerability Description
-
-Privilege escalation terjadi ketika user dengan role rendah dapat mengakses fitur yang seharusnya hanya tersedia untuk role lebih tinggi, atau ketika admin dapat memodifikasi akun sendiri untuk menghindari audit. Tanpa mekanisme otorisasi yang ketat di setiap view, attacker cukup menebak URL admin untuk mendapatkan akses penuh.
-
-#### Before (Vulnerable — Missing Authorization)
-
-```python
-# VULNERABLE: Tidak ada pengecekan role — siapapun bisa akses
-def user_list(request):
-    users = User.objects.all()
-    return render(request, 'admin_user_list.html', {'users': users})
-
-# VULNERABLE: Admin bisa deactivate akun sendiri (self-lockout)
-def user_toggle_active(request, user_id):
-    user = User.objects.get(id=user_id)
-    user.is_active = not user.is_active
-    user.save()  # Tidak ada cek apakah user == request.user
-```
-
-#### After (Mitigated — RBAC + Audit Log)
-
-```python
-# SAFE: Setiap view admin dilindungi @role_required('admin')
-@role_required('admin')               # ← CWE-285: Otorisasi eksplisit
-@require_http_methods(["GET", "POST"])
-def user_list(request):
-    users = User.objects.all().order_by('username')
-    return render(request, 'main/admin_user_list.html', {'users': users})
-
-# SAFE: Self-deactivation diblokir + setiap aksi dicatat di AuditLog
-@role_required('admin')
-@require_POST
-def user_toggle_active(request, user_id):
-    target_user = get_object_or_404(User, id=user_id)
-
-    if target_user.id == request.user.id:  # ← CWE-269: Cegah self-lockout
-        messages.error(request, 'You cannot deactivate your own account.')
-        return redirect('main:user_detail', user_id=target_user.id)
-
-    target_user.is_active = not target_user.is_active
-    target_user.save(update_fields=['is_active'])
-
-    create_audit_log(                  # ← CWE-862: Akuntabilitas via audit trail
-        'user_deactivated' if not target_user.is_active else 'user_activated',
-        request.user,
-        f'Set is_active={target_user.is_active} for {target_user.username}.',
-    )
-    return redirect('main:user_detail', user_id=target_user.id)
-```
-
-Sumber kode: [`main/decorators.py`](main/decorators.py), [`main/admin_views.py`](main/admin_views.py), [`main/audit.py`](main/audit.py)
-
-#### AuditLog Coverage
-
-Setiap aksi signifikan di seluruh sistem dicatat ke tabel `audit_logs`:
-
-| Action | Siapa | Dicatat saat |
-|--------|-------|-------------|
-| `user_logged_in` | member/librarian/admin | Login berhasil |
-| `user_logged_out` | member/librarian/admin | Logout |
-| `user_login_failed` | — (None) | Login gagal |
-| `user_registered` | user baru | Self-register |
-| `book_borrowed` | member | Pinjam buku |
-| `book_returned` | member | Kembalikan buku |
-| `book_read_online` | member | Buka reader online |
-| `book_added/updated/deleted` | librarian | CRUD buku |
-| `category_added/updated/deleted` | librarian | CRUD kategori |
-| `report_generated` | librarian | Generate laporan |
-| `user_created/edited/deactivated` | admin | Kelola user |
-| `user_role_changed` | admin | Ubah role |
-| `lockout_cleared` | admin | Hapus lockout IP |
-
-Implementasi di [`main/audit.py`](main/audit.py) — `create_audit_log()` memblokir penyimpanan substring `password` atau `token` di field `details` untuk mencegah credential leakage.
-
----
-
-## 3. Screenshot Aplikasi
-
-> Screenshot diambil dari aplikasi yang berjalan di `http://localhost:8000`
-
-| Halaman | Screenshot |
-|---------|------------|
-| Login Page | ![Login Page](assets/images/login.png) |
-| Member Dashboard | ![Member Dashboard](assets/images/member_dashboard.png) |
-| Borrow Confirmation | ![Borrow Confirm](assets/images/borrow-confirm.png) |
-| Borrow History | ![Borrow History](assets/images/borrow-history.png) |
-| Return Confirmation | ![Return Confirm](assets/images/return-confirm.png) |
-| Librarian Dashboard | ![Librarian Dashboard](assets/images/librarian_dashboard.png) |
-| Admin Dashboard | ![Admin Dashboard](assets/images/admin_dashboard.png) |
-| Audit Log | ![Audit Log](assets/images/audit_log.png) |
-| 403 Forbidden (least privilege demo) | ![403 Forbidden](assets/images/403_forbidden.png) |
-
----
-
-## 4. Hasil Test Case
+## 2. Ringkasan Test Case
 
 Semua test dijalankan dengan:
 ```bash
@@ -484,76 +40,24 @@ python manage.py test main.tests --verbosity=2
 | **TC-ADMIN-05** | Admin POST toggle active pada akun sendiri | Admin login | Diblokir — `is_active` tetap `True`, pesan error tampil | ✅ PASS |
 | **TC-ADMIN-06** | Admin ubah role member menjadi librarian | Admin login, member aktif | Role berubah di DB + entri `user_role_changed` di audit_logs | ✅ PASS |
 | **TC-ADMIN-07** | `create_audit_log()` dengan details mengandung `'password'` | — | `ValueError` dilempar — tidak tersimpan ke DB | ✅ PASS |
+| **TC-CSRF-LIB-01** | POST `/librarian/add-book/` tanpa CSRF token | Librarian login | 403 Forbidden | ✅ PASS |
+| **TC-CSRF-LIB-02** | POST `/librarian/update-book/<id>/` tanpa CSRF token | Librarian login, buku ada | 403 Forbidden; buku tidak berubah | ✅ PASS |
+| **TC-CSRF-LIB-03** | POST `/librarian/delete-book/<id>/` tanpa CSRF token | Librarian login, buku ada | 403 Forbidden; `is_deleted` tetap False | ✅ PASS |
+| **TC-CSRF-LIB-04** | POST `/librarian/categories/add/` tanpa CSRF token | Librarian login | 403 Forbidden | ✅ PASS |
+| **TC-CSRF-LIB-05** | POST `/librarian/categories/<id>/update/` tanpa CSRF token | Librarian login | 403 Forbidden; nama tidak berubah | ✅ PASS |
+| **TC-CSRF-LIB-06** | POST `/librarian/categories/<id>/delete/` tanpa CSRF token | Librarian login | 403 Forbidden; kategori masih ada | ✅ PASS |
+| **TC-CSRF-ADM-01** | POST `/admin-panel/users/create/` tanpa CSRF token | Admin login | 403 Forbidden; user tidak dibuat | ✅ PASS |
+| **TC-CSRF-ADM-02** | POST `/admin-panel/users/<id>/toggle/` tanpa CSRF token | Admin login | 403 Forbidden; `is_active` tidak berubah | ✅ PASS |
+| **TC-CSRF-ADM-03** | POST `/admin-panel/users/<id>/role/` tanpa CSRF token | Admin login | 403 Forbidden; role tidak berubah | ✅ PASS |
+| **TC-CSRF-ADM-04** | POST `/admin-panel/users/<id>/edit/` tanpa CSRF token | Admin login | 403 Forbidden; username tidak berubah | ✅ PASS |
+| **TC-SQLI-CREATE-01** | POST `/librarian/add-book/` dengan payload `' OR '1'='1'--` di description | Librarian login | Tidak ada 500 error; tabel books tetap utuh | ✅ PASS |
+| **TC-SQLI-CREATE-02** | POST `/librarian/add-book/` dengan `' OR '1'='1'--` di title (mengandung `=`) | Librarian login | Form ditolak validator (allowlist tidak izinkan `=`) | ✅ PASS |
+| **TC-SQLI-UPDATE-01** | POST `/librarian/update-book/<id>/` dengan `'; DROP TABLE books;--` di description | Librarian login, buku ada | Tidak ada 500 error; tabel books tetap utuh | ✅ PASS |
+| **TC-SQLI-ADMIN-01** | POST `/admin-panel/users/create/` dengan `'; DROP TABLE users;--` di membership_number | Admin login | Tidak ada 500 error; tabel users tetap utuh | ✅ PASS |
 
 ---
 
-## 5. Petunjuk Instalasi
-
-```bash
-# 1. Clone repository
-git clone https://github.com/hacker-jangan-menyerang/Tugas-3.git
-cd Tugas-3
-
-# 2. Buat virtual environment
-python -m venv venv
-
-# 3. Aktifkan virtual environment
-# Windows:
-venv\Scripts\activate
-# Linux/Mac:
-source venv/bin/activate
-
-# 4. Install dependencies
-pip install -r requirements.txt
-
-# 5. Buat file .env (opsional — ada default dev key)
-cp .env.example .env  # atau buat manual
-
-# 6. Jalankan migrasi
-python manage.py migrate
-
-# 7. Seed database dengan data demo
-python seed.py
-
-# 8. Jalankan server
-python manage.py runserver
-# Akses di: http://127.0.0.1:8000/
-```
-
-> **Catatan:** `requirements.txt` menyertakan `psycopg2-binary` yang tidak digunakan — runtime database adalah SQLite. Entri tersebut dapat diabaikan dan tidak mempengaruhi jalannya aplikasi.
-
-### Default Credentials (dari seed.py)
-
-| Username | Password | Role |
-|----------|----------|------|
-| `admin` | `admin123` | admin |
-| `librarian1` | `librarian123` | librarian |
-| `librarian2` | `librarian123` | librarian |
-| `member1` | `member123` | member |
-| `member2` | `member123` | member |
-
-### Menjalankan Test
-
-```bash
-# Semua test
-python manage.py test main.tests --verbosity=2
-
-# Satu kelas test saja
-python manage.py test main.tests.AdminFeatureTests --verbosity=2
-
-# Satu method saja
-python manage.py test main.tests.AdminFeatureTests.test_tc_admin_01_member_blocked_from_admin_panel -v 2
-```
-
----
-
-## 6. Link Video Demo
-
-YouTube (Unlisted): [https://youtu.be/C7Hx3mI3DoA](https://youtu.be/C7Hx3mI3DoA)
-
----
-
-## 7. Laporan Unit Testing
+## 3. Laporan Unit Testing
 
 Unit testing menggunakan framework bawaan Django (`django.test.TestCase`), dijalankan dengan:
 
@@ -561,13 +65,11 @@ Unit testing menggunakan framework bawaan Django (`django.test.TestCase`), dijal
 python manage.py test main --verbosity=2
 ```
 
-Total **53 test** lulus dengan hasil **OK (0 failure, 0 error)**:
+Total **69 test** lulus dengan hasil **OK (0 failure, 0 error)**:
 
 ![Seluruh unit test PASS](assets/images/unittest_pass.png)
 
-Subbab berikut menjelaskan test per topik keamanan (penomoran mengikuti Bagian 2).
-
-### 7.1 Code Injection Prevention (CWE-79 / 20 / 94) — Roberto Eugenio Sugiarto (2406355640)
+### 3.1 Code Injection Prevention (CWE-79 / 20 / 94) — Roberto Eugenio Sugiarto (2406355640)
 
 Pengujian mitigasi injeksi kode dilakukan pada berkas `main/tests.py` melalui tiga kelas pengujian utama, yaitu `XSSPreventionTests`, `InputValidationTests`, dan `FileUploadSecurityTests`.
 
@@ -579,14 +81,14 @@ Pengujian mitigasi injeksi kode dilakukan pada berkas `main/tests.py` melalui ti
 
 **Kelas `InputValidationTests`**
 - `test_tc_input_01_missing_required_fields`: Menolak pengiriman form penambahan buku bilamana kolom wajib tidak diisi.
-- `test_isbn_only_numbers_and_hyphens`: Menjamin ISBN tidak menerima sembarang karakter dan hanya menyetuji angka beserta tanda hubung.
+- `test_isbn_only_numbers_and_hyphens`: Menjamin ISBN tidak menerima sembarang karakter dan hanya menyetujui angka beserta tanda hubung.
 
 **Kelas `FileUploadSecurityTests`**
 - `test_tc_file_01_exe_disguised_as_pdf`: Memastikan bahwa berkas biner eksekusi dengan nama yang diubah menjadi PDF akan dihentikan sistem berdasarkan pemeriksaan tipe berkas secara menyeluruh.
-- `test_exe_extension_rejected`: Menolak format aplikasi tak dikenal secara langsung sejak validasi esktensi tahap awal.
+- `test_exe_extension_rejected`: Menolak format aplikasi tak dikenal secara langsung sejak validasi ekstensi tahap awal.
 - `test_valid_pdf_accepted`: Menyelesaikan rangkaian uji dengan mengizinkan dokumen sah agar berhasil masuk ke aplikasi tanpa memunculkan galat.
 
-### 7.2 Broken Authentication Mitigation (CWE-287 / 307 / 256 / 384) — Kevin Cornellius Widjaja (2406428781)
+### 3.2 Broken Authentication Mitigation (CWE-287 / 307 / 256 / 384) — Kevin Cornellius Widjaja (2406428781)
 
 **Diuji:** alur login & logout ([`main/auth_views.py`](main/auth_views.py)), registrasi ([`main/auth_views.py`](main/auth_views.py), [`main/forms.py`](main/forms.py)), dan dekorator RBAC ([`main/decorators.py`](main/decorators.py)). **Test:** [`main/tests.py`](main/tests.py), 9 test, semua PASS.
 
@@ -652,23 +154,45 @@ Hasil:
 
 `auth_views.py` mencapai 90% — 12 baris yang tidak tertutup adalah cabang error minor (mis. path redirect saat user sudah login membuka `/login/`). `decorators.py` 100% karena seluruh alur (authenticated + role cocok, authenticated + role salah, unauthenticated) dicakup oleh `RoleRequiredDecoratorTests` dan `RoleAccessTests`.
 
-### 7.3 CSRF & IDOR Protection (CWE-352 / 639) — Benedictus Lucky Win Ziraluo (2406355174)
+### 3.3 CSRF & IDOR Protection (CWE-352 / 639) — Benedictus Lucky Win Ziraluo (2406355174)
 
-**Diuji:** proteksi CSRF pada endpoint borrow/return dan pencegahan IDOR pada return/history. **Test:** `CSRFProtectionTests` dan `IDORPreventionTests` di `main/tests.py`, semua PASS.
+**Diuji:** proteksi CSRF pada seluruh endpoint write (member, librarian, admin) dan pencegahan IDOR pada return/history. **Test:** `CSRFProtectionTests`, `CSRFLibrarianEndpointTests`, `CSRFAdminEndpointTests`, dan `IDORPreventionTests` di `main/tests.py`, semua PASS.
 
 **Ringkas hasil uji:**
 
 | Kelas Test | Yang diuji | Hasil |
 |-----------|-----------|-------|
 | `CSRFProtectionTests` | POST tanpa token dan token salah pada `/member/borrow/<id>/` dan `/member/return/<id>/` | 403 Forbidden; token valid berhasil (borrow sukses, redirect) |
+| `CSRFLibrarianEndpointTests` | POST tanpa token pada add/update/delete book dan add/update/delete category | 403 Forbidden pada semua 6 endpoint; data tidak berubah |
+| `CSRFAdminEndpointTests` | POST tanpa token pada user_create, user_toggle, user_change_role, user_edit | 403 Forbidden pada semua 4 endpoint; state DB tidak berubah |
 | `IDORPreventionTests` | Return transaksi milik member lain + history | Return milik member lain 404; history hanya menampilkan transaksi milik sendiri |
 
 ![CSRFProtectionTests PASS](assets/images/csrfprotectiontest.png)
 ![IDORPreventionTests PASS](assets/images/idorpreventiontest.png)
 
-### 7.4 SQL Injection Prevention (CWE-89) — Vincent Valentino Oei (2406353225)
+#### `CSRFLibrarianEndpointTests` — Semua Write Endpoint Librarian
 
-**Diuji:** view `search_books` ([`main/search_views.py`](main/search_views.py)) dan alur login ([`main/auth_views.py`](main/auth_views.py), [`main/forms.py`](main/forms.py)). **Test:** [`main/tests.py`](main/tests.py), 8 test, semua PASS.
+| Method | Endpoint | Hasil yang diharapkan |
+|--------|----------|-----------------------|
+| `test_add_book_requires_csrf_token` | POST `/librarian/add-book/` | `403 Forbidden` |
+| `test_update_book_requires_csrf_token` | POST `/librarian/update-book/<id>/` | `403 Forbidden` |
+| `test_delete_book_requires_csrf_token` | POST `/librarian/delete-book/<id>/` | `403 Forbidden`; `is_deleted` tetap `False` |
+| `test_add_category_requires_csrf_token` | POST `/librarian/categories/add/` | `403 Forbidden` |
+| `test_update_category_requires_csrf_token` | POST `/librarian/categories/<id>/update/` | `403 Forbidden`; nama kategori tidak berubah |
+| `test_delete_category_requires_csrf_token` | POST `/librarian/categories/<id>/delete/` | `403 Forbidden`; kategori masih ada di DB |
+
+#### `CSRFAdminEndpointTests` — Semua Write Endpoint Admin
+
+| Method | Endpoint | Hasil yang diharapkan |
+|--------|----------|-----------------------|
+| `test_user_create_requires_csrf_token` | POST `/admin-panel/users/create/` | `403 Forbidden`; user tidak dibuat |
+| `test_user_toggle_requires_csrf_token` | POST `/admin-panel/users/<id>/toggle/` | `403 Forbidden`; `is_active` tidak berubah |
+| `test_user_change_role_requires_csrf_token` | POST `/admin-panel/users/<id>/role/` | `403 Forbidden`; `role` tidak berubah |
+| `test_user_edit_requires_csrf_token` | POST `/admin-panel/users/<id>/edit/` | `403 Forbidden`; username tidak berubah |
+
+### 3.4 SQL Injection Prevention (CWE-89) — Vincent Valentino Oei (2406353225)
+
+**Diuji:** search, login, create (add_book, user_create), update (update_book), dan inspeksi source code. **Test:** [`main/tests.py`](main/tests.py), 14 test, semua PASS.
 
 Semua query database memakai Django ORM (parameterized query), sehingga payload injeksi hanya dianggap teks biasa (mitigasi CWE-89). Sebagai lapisan kedua, form login membatasi username dengan allowlist `^[a-zA-Z0-9_]+$`.
 
@@ -677,8 +201,20 @@ Semua query database memakai Django ORM (parameterized query), sehingga payload 
 | `SQLInjectionSearchTests` | Payload `' OR '1'='1'--`, `'; DROP TABLE book;--`, dan `UNION SELECT` pada pencarian | Payload jadi teks biasa, hasil 0, tabel utuh, tidak ada data bocor |
 | `SQLInjectionLoginTests` | Username `admin'--` dll. pada form login | Ditolak validasi, login gagal |
 | `SQLInjectionModelTests` | Inspeksi kode search view | Tanpa `cursor.execute`, memakai `Q()` ORM |
+| `SQLInjectionCreateUpdateTests` | Payload SQLi pada add_book (description), update_book (description), dan admin user_create (membership_number); inspeksi librarian_views dan admin_views | Tidak ada 500 error, tabel tetap utuh, ORM parameterized, tidak ada `cursor.execute` |
 
-### 7.5 Privilege Escalation Mitigation (CWE-269 / 285 / 862) — Galih Nur Rizqy (2406343224)
+#### `SQLInjectionCreateUpdateTests` — Detail
+
+| Method | Endpoint | Payload | Hasil yang diharapkan |
+|--------|----------|---------|----------------------|
+| `test_sqli_payload_in_add_book_description` | POST `/librarian/add-book/` | `' OR '1'='1'--`, `'; DROP TABLE books;--`, `UNION SELECT` di description | Tidak ada 500; tabel books tetap ada |
+| `test_sqli_payload_rejected_by_title_validator` | POST `/librarian/add-book/` | `' OR '1'='1'--` di title | Form ditolak (title allowlist tidak mengizinkan `=`) |
+| `test_sqli_in_update_book_no_error` | POST `/librarian/update-book/<id>/` | `'; DROP TABLE books; --` di description | Tidak ada 500; tabel books tetap ada |
+| `test_sqli_in_admin_user_create_no_error` | POST `/admin-panel/users/create/` | `'; DROP TABLE users; --` di membership_number | Tidak ada 500; tabel users tetap ada |
+| `test_no_raw_sql_in_librarian_views` | Inspeksi source `librarian_views.py` | — | Tidak ada `cursor.execute` |
+| `test_no_raw_sql_in_admin_views` | Inspeksi source `admin_views.py` | — | Tidak ada `cursor.execute` |
+
+### 3.5 Privilege Escalation Mitigation (CWE-269 / 285 / 862) — Galih Nur Rizqy (2406343224)
 
 **Diuji:** kontrol akses berbasis role di seluruh panel admin ([`main/admin_views.py`](main/admin_views.py)), decorator RBAC ([`main/decorators.py`](main/decorators.py)), dan audit log ([`main/audit.py`](main/audit.py)). **Test:** `AdminFeatureTests`, `RoleAccessTests`, `LibrarianRBACTests` di `main/tests.py`, semua PASS.
 
@@ -713,8 +249,6 @@ if any(kw in details.lower() for kw in ('password', 'token')):
 
 #### `RoleAccessTests` — Cross-Role Access Prevention
 
-Kelas ini memverifikasi bahwa setiap role hanya bisa mengakses halaman miliknya dan diblokir dari halaman role lain:
-
 | Method | Yang diuji | Hasil yang diharapkan |
 |--------|------------|----------------------|
 | `test_member_can_access_member_dashboard` | Member GET `/member/` | `200 OK` |
@@ -722,8 +256,6 @@ Kelas ini memverifikasi bahwa setiap role hanya bisa mengakses halaman miliknya 
 | `test_unauthenticated_redirects_to_login` | Unauthenticated GET `/member/` | `302` ke `/login/` |
 
 #### `LibrarianRBACTests` — Librarian Role Isolation
-
-Kelas ini memverifikasi bahwa kontrol akses berlaku pada fitur librarian — librarian bisa akses dashboard-nya sendiri, tapi member dan user anonim tidak bisa:
 
 | Method | Yang diuji | Hasil yang diharapkan |
 |--------|------------|----------------------|
@@ -734,17 +266,17 @@ Kelas ini memverifikasi bahwa kontrol akses berlaku pada fitur librarian — lib
 
 ---
 
-## 8. Laporan Pentesting
+## 4. Laporan Pentesting
 
 Pentesting dilakukan dalam 5 tahapan sesuai ketentuan tugas. Target uji: aplikasi yang berjalan di `http://127.0.0.1:8000/`.
 
-### 8.1 Reconnaissance (Passive & Active) — Vincent Valentino Oei (2406353225)
+### 4.1 Reconnaissance (Passive & Active) — Vincent Valentino Oei (2406353225)
 
 Tools: nmap, curl, OWASP ZAP. Target: `http://127.0.0.1:8000/`.
 
 **Teknologi aplikasi:** Django (dev server WSGIServer, Python 3.12), database SQLite, rate limiting django-axes, frontend Tailwind CSS via CDN, password hashing PBKDF2.
 
-**Daftar endpoint** (ringkasan dari [Bagian 1](#1-deskripsi-aplikasi)):
+**Daftar endpoint** (ringkasan):
 
 - Publik dan Member: `/register/`, `/login/`, `/logout/`, `/books/`, `/books/search/`, `/books/<id>/`, `/member/borrow/<id>/`, `/member/return/<id>/`, `/member/history/`, `/member/read/<id>/`
 - Librarian: `/librarian/`, `/librarian/books/`, `/librarian/categories/`, `/librarian/report/`
@@ -762,9 +294,9 @@ Tools: nmap, curl, OWASP ZAP. Target: `http://127.0.0.1:8000/`.
 
 ![ZAP alerts](assets/images/zap_alerts.png)
 
-Kesimpulan: tidak ada temuan High. Isu utama yaitu CSP dan HSTS belum diset serta server version disclosure (melengkapi config bug Bagian 8.4).
+Kesimpulan: tidak ada temuan High. Isu utama yaitu CSP dan HSTS belum diset serta server version disclosure (melengkapi config bug Bagian 4.4).
 
-### 8.2 Threat Modeling
+### 4.2 Threat Modeling
 
 **Data Flow Diagram (DFD):**
 
@@ -788,18 +320,18 @@ flowchart LR
 
 **STRIDE per halaman/fitur (pemetaan ke CWE):**
 
-| Halaman/Fitur | STRIDE | CWE | Contoh ancaman |
-|--------------|--------|-----|----------------|
-| Login (`/login/`) | Spoofing | CWE-287 | Kredensial ditebak/credential stuffing untuk menyamar sebagai user lain |
-| Login (`/login/`) | DoS | CWE-307 | Brute force berulang menyebabkan lockout atau gangguan layanan |
-| Register (`/register/`) | Elevation | CWE-269 | Tampering parameter role untuk mendaftar sebagai admin/librarian |
-| Search (`/books/search/`) | Tampering / Info Disclosure | CWE-89 | SQL injection untuk membaca data sensitif |
-| Borrow/Return (`/member/borrow/<id>/`, `/member/return/<id>/`) | Tampering | CWE-352 | CSRF memaksa user meminjam/return tanpa consent |
-| Borrow/Return (`/member/return/<id>/`, `/member/history/`) | Info Disclosure / Elevation | CWE-639 | IDOR akses transaksi milik member lain |
-| Librarian book/category forms (`/librarian/books/`, `/librarian/categories/`) | Tampering | CWE-79, CWE-20 | XSS atau input berbahaya pada judul/kategori |
-| Admin/Librarian pages (`/admin-panel/`, `/librarian/`) | Elevation | CWE-285 | Akses halaman privileged tanpa otorisasi |
+| Halaman/Fitur | STRIDE | CWE | Contoh ancaman | Impact | Likelihood | Prioritas |
+|--------------|--------|-----|----------------|--------|------------|-----------|
+| Login (`/login/`) | Spoofing | CWE-287 | Kredensial ditebak/credential stuffing untuk menyamar sebagai user lain | Akses penuh ke akun korban | Tinggi | 1 |
+| Login (`/login/`) | DoS | CWE-307 | Brute force berulang menyebabkan lockout atau gangguan layanan | Lockout akun sah | Tinggi | 2 |
+| Register (`/register/`) | Elevation | CWE-269 | Tampering parameter role untuk mendaftar sebagai admin/librarian | Akses penuh ke panel admin | Sedang | 3 |
+| Search (`/books/search/`) | Tampering / Info Disclosure | CWE-89 | SQL injection untuk membaca data sensitif | Data leakage / korupsi DB | Sedang | 2 |
+| Borrow/Return (`/member/borrow/<id>/`, `/member/return/<id>/`) | Tampering | CWE-352 | CSRF memaksa user meminjam/return tanpa consent | Transaksi tidak sah atas nama user | Sedang | 3 |
+| Borrow/Return (`/member/return/<id>/`, `/member/history/`) | Info Disclosure / Elevation | CWE-639 | IDOR akses transaksi milik member lain | Manipulasi data member lain | Sedang | 3 |
+| Librarian book/category forms (`/librarian/books/`, `/librarian/categories/`) | Tampering | CWE-79, CWE-20 | XSS atau input berbahaya pada judul/kategori | Eksekusi script di browser admin/member | Rendah | 4 |
+| Admin/Librarian pages (`/admin-panel/`, `/librarian/`) | Elevation | CWE-285 | Akses halaman privileged tanpa otorisasi | Kendali penuh atas sistem | Tinggi | 1 |
 
-### 8.3 Scanning & Enumeration
+### 4.3 Scanning & Enumeration
 
 Scanning dilakukan dengan dua tool: **OWASP ZAP** (otomatis) dan **curl** (manual header inspection).
 
@@ -825,7 +357,7 @@ Laporan lengkap: [`assets/zap_report.html`](assets/zap_report.html).
 
 Tidak ditemukan endpoint yang mengembalikan data SQL error atau stack trace pada input berbahaya — semua payload diproses melalui Django ORM dan dikembalikan sebagai 0 hasil atau form error biasa.
 
-### 8.4 Exploitation & Testing
+### 4.4 Exploitation & Testing
 
 Setiap pemilik topik mendemonstrasikan serangan pada fiturnya langsung di browser dan menunjukkan bahwa serangan gagal/diblokir.
 
@@ -845,16 +377,16 @@ Empat payload SQL injection diuji langsung melalui endpoint pencarian (`/books/s
 
 ![SQLi UNION-based](assets/images/sqli_pentest_3.png)
 
-**4. Authentication bypass, login username `admin'--`:** login gagal. Username ditolak allowlist regex pada form login dan tidak pernah mencapai database (terverifikasi pada unit test TC-SQLI-02, lihat Bagian 7.4).
+**4. Authentication bypass, login username `admin'--`:** login gagal. Username ditolak allowlist regex pada form login dan tidak pernah mencapai database (terverifikasi pada unit test TC-SQLI-02, lihat Bagian 3.4).
 
 **Temuan (F-SQLI):**
 
-| ID | Serangan | CWE | Status | Bukti |
-|----|----------|-----|--------|-------|
-| F-SQLI-01 | Boolean-based injection (`' OR '1'='1'--`) pada search | CWE-89 | Aman, 0 hasil | `sqli_pentest_1.png` |
-| F-SQLI-02 | Stacked query `DROP TABLE` pada search | CWE-89 | Aman, tabel utuh | `sqli_pentest_2.png` |
-| F-SQLI-03 | UNION-based data exfiltration pada search | CWE-89 | Aman, tidak ada data bocor | `sqli_pentest_3.png` |
-| F-SQLI-04 | Auth bypass login `admin'--` | CWE-89 | Aman, ditolak validasi/ORM | Unit test TC-SQLI-02 (Bagian 7.4) |
+| ID | Serangan | Affected Endpoint | CWE | Status | Impact | Reproduction Steps | Evidence |
+|----|----------|-------------------|-----|--------|--------|--------------------|----------|
+| F-SQLI-01 | Boolean-based injection (`' OR '1'='1'--`) | `/books/search/` | CWE-89 | Aman | Tidak ada data bocor, 0 hasil | GET `/books/search/?q=' OR '1'='1'--` | `sqli_pentest_1.png` |
+| F-SQLI-02 | Stacked query `DROP TABLE` | `/books/search/` | CWE-89 | Aman | Tabel tetap utuh | GET `/books/search/?q='; DROP TABLE books;--` | `sqli_pentest_2.png` |
+| F-SQLI-03 | UNION-based data exfiltration | `/books/search/` | CWE-89 | Aman | Tidak ada data bocor | GET `/books/search/?q=' UNION SELECT username,password FROM users--` | `sqli_pentest_3.png` |
+| F-SQLI-04 | Auth bypass login | `/login/` | CWE-89 | Aman | Login gagal, ditolak validasi | POST `/login/` dengan username `admin'--` | Unit test TC-SQLI-02 |
 
 Kesimpulan: tidak ditemukan kerentanan SQL injection. Seluruh input dieksekusi melalui Django ORM, diperkuat validasi input allowlist pada form login.
 
@@ -876,11 +408,11 @@ CSRF diuji dengan request POST manual saat login member; request tanpa token dan
 
 **Temuan (F-CSRF):**
 
-| ID | Serangan | CWE | Status | Bukti |
-|----|----------|-----|--------|-------|
-| F-CSRF-01 | CSRF token missing pada borrow | CWE-352 | Aman, 403 | `csrftokenmissing.png` |
-| F-CSRF-02 | CSRF token invalid pada borrow | CWE-352 | Aman, 403 | `csrftokeninvalid.png` |
-| F-CSRF-03 | IDOR return milik member lain | CWE-639 | Aman, 404 | `idortest.png` |
+| ID | Serangan | Affected Endpoint | CWE | Status | Impact | Reproduction Steps | Evidence |
+|----|----------|-------------------|-----|--------|--------|--------------------|----------|
+| F-CSRF-01 | CSRF token missing pada borrow | `/member/borrow/<id>/` | CWE-352 | Aman, 403 | Tidak ada | POST tanpa header `csrfmiddlewaretoken` | `csrftokenmissing.png` |
+| F-CSRF-02 | CSRF token invalid pada borrow | `/member/borrow/<id>/` | CWE-352 | Aman, 403 | Tidak ada | POST dengan `csrfmiddlewaretoken=INVALID` | `csrftokeninvalid.png` |
+| F-CSRF-03 | IDOR return milik member lain | `/member/return/<id>/` | CWE-639 | Aman, 404 | Tidak ada | Login sebagai Member A, POST `/member/return/<id_transaksi_B>/` | `idortest.png` |
 
 #### Broken Authentication (CWE-287 / 307 / 256 / 384) — Kevin Cornellius Widjaja (2406428781)
 
@@ -909,22 +441,16 @@ Tidak ada satu pun akun yang menyimpan password dalam bentuk plaintext. Django s
 
 Prosedur: (a) login sebagai `member1`, catat nilai cookie `sessionid` dari DevTools; (b) klik Logout; (c) buka tab Incognito, set cookie `sessionid` ke nilai lama, akses `/member/`. Hasilnya: browser di-redirect ke `/login/` — session lama tidak dikenali server karena `logout()` memanggil `session.flush()` yang menghapus data sesi dari store.
 
-Implementasi `session.flush()` pada logout view:
-
 ![Kode logout — session.flush() menginvalidasi session](assets/images/auth_logout_code.png)
 
 **Temuan (F-AUTH):**
 
-| ID | Serangan | CWE | Severity | Status | Bukti | Rekomendasi |
-|----|----------|-----|----------|--------|-------|-------------|
-| F-AUTH-01 | Brute-force login (> 5 percobaan gagal) | CWE-307 | High | **Aman** — HTTP 429 setelah 5 gagal | `auth_login_locked.png`, TC-AUTH-01 | Konfigurasi sudah tepat; pertimbangkan notifikasi email kepada pemilik akun saat lockout |
-| F-AUTH-02 | Password disimpan plaintext di database | CWE-256 | Critical | **Aman** — PBKDF2-SHA256 1.2M iterasi | `auth_pbkdf_hashed.png`, TC-AUTH-02 | Tidak ada tindakan lanjut; sudah best-practice |
-| F-AUTH-03 | Reuse session token setelah logout (session fixation) | CWE-384 | High | **Aman** — session lama diinvalidasi | `auth_logout_code.png`, TC-AUTH-03 | Sudah aman; tambahkan `SESSION_COOKIE_SECURE = True` saat deploy ke HTTPS |
-| F-AUTH-04 | Tidak ada pembatasan role pada `/register/` | CWE-287 | Medium | **Rentan** — siapapun bisa daftar sebagai Admin/Librarian | Lihat form registrasi | Batasi pilihan role di `/register/` ke `member` saja; Admin/Librarian dibuat via admin panel |
-
-Kesimpulan: tiga dari empat kontrol autentikasi sudah terimplementasi dengan baik. Satu temuan nyata (F-AUTH-04): form registrasi mengekspos semua pilihan role — pada sistem produksi harus dibatasi ke `member` saja.
-
-
+| ID | Serangan | Affected Endpoint | CWE | Severity | Status | Impact | Reproduction Steps | Evidence | Rekomendasi |
+|----|----------|-------------------|-----|----------|--------|--------|--------------------|----------|-------------|
+| F-AUTH-01 | Brute-force login (> 5 percobaan gagal) | `/login/` | CWE-307 | High | **Aman** — HTTP 429 setelah 5 gagal | Tidak ada; lockout aktif | POST `/login/` dengan password salah ≥ 6 kali berturut-turut | `auth_login_locked.png`, TC-AUTH-01 | Konfigurasi sudah tepat; pertimbangkan notifikasi email saat lockout |
+| F-AUTH-02 | Password disimpan plaintext di database | `/register/`, DB | CWE-256 | Critical | **Aman** — PBKDF2-SHA256 1.2M iterasi | Tidak ada | `sqlite3 db.sqlite3 "SELECT password FROM users LIMIT 1;"` | `auth_pbkdf_hashed.png`, TC-AUTH-02 | Tidak ada tindakan lanjut; sudah best-practice |
+| F-AUTH-03 | Reuse session token setelah logout | `/member/` | CWE-384 | High | **Aman** — session lama diinvalidasi | Tidak ada | Login → logout → gunakan sessionid lama di Incognito | `auth_logout_code.png`, TC-AUTH-03 | Sudah aman; tambahkan `SESSION_COOKIE_SECURE=True` saat deploy ke HTTPS |
+| F-AUTH-04 | Self-registration ke role Admin/Librarian | `/register/` | CWE-287 | Medium | **Rentan** (by design untuk demo) | Akses penuh ke admin panel | Isi form registrasi dengan role `Admin`, submit | Form registrasi | Batasi pilihan role di `/register/` ke `member` saja pada production |
 
 #### Privilege Escalation & Misconfiguration (CWE-269 / 285 / 862) — Galih Nur Rizqy (2406343224)
 
@@ -986,13 +512,13 @@ Setelah mendaftar dengan role Admin melalui `/register/`, akun baru berhasil log
 
 **Temuan (F-PRIV):**
 
-| ID | Temuan | CWE | Severity | Status | Bukti | Rekomendasi |
-|----|--------|-----|----------|--------|-------|-------------|
-| F-PRIV-01 | Member/Librarian dapat akses halaman admin via URL langsung | CWE-285 | High | **Aman** — 403 Forbidden oleh `@role_required('admin')` | `rbac_1.png`, `rbac_2.png`, TC-ADMIN-01, TC-ADMIN-02 | Sudah terimplementasi |
-| F-PRIV-02 | Admin bisa self-deactivate (self-lockout) | CWE-269 | Medium | **Aman** — diblokir UI + backend check | `rbac_3.png`, TC-ADMIN-05 | Sudah terimplementasi |
-| F-PRIV-03 | `DEBUG=True` — halaman error bocorkan info internal | CWE-215 | Medium | **Rentan** — stack trace terekspos | `config_bugs_1.png` | Set `DEBUG=False` di production; gunakan env var |
-| F-PRIV-04 | Missing `Content-Security-Policy` dan `Strict-Transport-Security` | CWE-693 | Medium | **Rentan** — header tidak ada | `config_bugs_2.png`, ZAP alerts | Tambah `django-csp`; set `SECURE_HSTS_SECONDS` di settings |
-| F-PRIV-05 | Self-registration ke role Admin/Librarian via `/register/` | CWE-269 | High | **Rentan** (by design untuk demo) | `config_bugs_3.png`, `config_bugs_4.png` | Batasi ChoiceField ke `member` saja; Admin/Librarian dibuat via admin panel |
+| ID | Temuan | Affected Endpoint | CWE | Severity | Status | Impact | Reproduction Steps | Evidence | Rekomendasi |
+|----|--------|-------------------|-----|----------|--------|--------|--------------------|----------|-------------|
+| F-PRIV-01 | Member/Librarian dapat akses halaman admin via URL langsung | `/admin-panel/`, `/admin-panel/users/` | CWE-285 | High | **Aman** — 403 Forbidden oleh `@role_required('admin')` | Tidak ada | Login sebagai member → GET `/admin-panel/` | `rbac_1.png`, `rbac_2.png` | Sudah terimplementasi |
+| F-PRIV-02 | Admin bisa self-deactivate (self-lockout) | `/admin-panel/users/<id>/toggle/` | CWE-269 | Medium | **Aman** — diblokir UI + backend check | Tidak ada | Login sebagai admin → POST toggle pada user_id diri sendiri | `rbac_3.png` | Sudah terimplementasi |
+| F-PRIV-03 | `DEBUG=True` — halaman error bocorkan info internal | Semua endpoint (404/500) | CWE-215 | Medium | **Rentan** — stack trace terekspos | Path file server, versi library, env vars | Akses URL tidak terdaftar, mis. `/nonexistent/` | `config_bugs_1.png` | Set `DEBUG=False` di production; gunakan env var |
+| F-PRIV-04 | Missing `Content-Security-Policy` dan `Strict-Transport-Security` | Semua respons HTTP | CWE-693 | Medium | **Rentan** — header tidak ada | Potensi XSS via CDN, clickjacking | `curl -I http://127.0.0.1:8000/login/` lalu periksa headers | `config_bugs_2.png`, ZAP alerts | Tambah `django-csp`; set `SECURE_HSTS_SECONDS` di settings |
+| F-PRIV-05 | Self-registration ke role Admin/Librarian via `/register/` | `/register/` | CWE-269 | High | **Rentan** (by design untuk demo) | Akses penuh ke admin panel | Buka `/register/`, pilih role Admin, isi form, submit | `config_bugs_3.png`, `config_bugs_4.png` | Batasi ChoiceField ke `member` saja; Admin/Librarian dibuat via admin panel |
 
 #### Code Injection / XSS (CWE-79 / 20 / 94) — Roberto Eugenio Sugiarto (2406355640)
 
@@ -1015,81 +541,36 @@ Pengujian injeksi kode dieksekusi dengan login sebagai *librarian* dan mengisi f
 
 **Temuan (F-XSS):**
 
-| ID | Serangan | CWE | Status | Bukti |
-|----|----------|-----|--------|-------|
-| F-XSS-01 | Stored XSS judul buku `<script>alert(1)</script>` | CWE-79 | Aman, ditolak validator | `xss_pentest_1.png` |
-| F-XSS-02 | Stored XSS pada deskripsi dibersihkan | CWE-79 | Aman, tag HTML di-strip | `xss_pentest_2a.png`, `xss_pentest_2b.png` |
-| F-XSS-03 | Injeksi shell lampiran e-book format `.exe` | CWE-94 | Aman, validasi ekstensi menggagalkan proses | `xss_pentest_3a.png`, dst |
+| ID | Serangan | Affected Endpoint | CWE | Status | Impact | Reproduction Steps | Evidence |
+|----|----------|-------------------|-----|--------|--------|--------------------|----------|
+| F-XSS-01 | Stored XSS judul buku `<script>alert(1)</script>` | `/librarian/books/add/` | CWE-79 | Aman, ditolak validator | Tidak ada | Login librarian → isi title dengan `<script>alert(1)</script>` → submit | `xss_pentest_1.png` |
+| F-XSS-02 | Stored XSS pada deskripsi dibersihkan | `/librarian/books/add/` | CWE-79 | Aman, tag HTML di-strip | Tidak ada | Login librarian → isi description dengan `<img src=x onerror=alert(1)>` → submit → cek DB | `xss_pentest_2a.png`, `xss_pentest_2b.png` |
+| F-XSS-03 | Injeksi shell lampiran e-book format `.exe` | `/librarian/books/add/` | CWE-94 | Aman, validasi ekstensi menggagalkan proses | Tidak ada | Login librarian → upload file `.exe` → submit | `xss_pentest_3a.png`, dst |
 
 Kesimpulan: Tidak ditemui celah *Cross-Site Scripting* (XSS) maupun Injeksi Kode via pengisian entri form. Aplikasi telah menangkis ragam *tag* berbahaya melewati sistem pertahanan eksternal form (Form Validation Regex, Validator Berkas).
 
-### 8.5 Reporting & Remediation (Gabungan) — Roberto Eugenio Sugiarto (2406355640)
+### 4.5 Reporting & Remediation (Gabungan) — Roberto Eugenio Sugiarto (2406355640)
 
-Tabel berikut merangkum seluruh temuan kerentanan gabungan per skenario keamanan dari semua anggota tim beserta langkah perbaikannya (*How to fix*) untuk *bug-bug* yang benar-benar terpapar secara terpisah:
+Tabel berikut merangkum seluruh temuan kerentanan gabungan per skenario keamanan dari semua anggota tim beserta langkah perbaikannya (*How to fix*). Temuan diurutkan berdasarkan **prioritas risiko** (High → Medium → Low):
 
-| ID | Finding | CWE | Severity | Fixed? | Evidence | How to fix |
-|---|---|---|---|---|---|---|
-| F-SQLI-01 | Boolean-based injection (`' OR '1'='1'--`) pada search | CWE-89 | High | Yes | `sqli_pentest_1.png` | Terus pertahankan penggunaan parameterized query via objek Django ORM (`Q`). |
-| F-SQLI-02 | Stacked query `DROP TABLE` pada search | CWE-89 | High | Yes | `sqli_pentest_2.png` | Sama seperti F-SQLI-01, hindari eksekusi SQL mentah. |
-| F-SQLI-03 | UNION-based data exfiltration pada search | CWE-89 | High | Yes | `sqli_pentest_3.png` | Teruskan perlakuan pencegahan melalui Django ORM *objects*. |
-| F-SQLI-04 | Auth bypass parameter login `admin'--` | CWE-89 | High | Yes | Unit test `TC-SQLI-02` | Jangan mencabut perlindungan regex *allowlist* serta proses ORM. |
-| F-CSRF-01 | Pengosongan/kekurangan CSRF token pada sesi peminjaman | CWE-352 | Medium | Yes | `csrftokenmissing.png` | Tetap pertahankan kewajiban keberadaan *middleware* `CsrfViewMiddleware`. |
-| F-CSRF-02 | Eksploitasi CSRF field token yang bersifat invalid | CWE-352 | Medium | Yes | `csrftokeninvalid.png` | Sama kriteria perlindungannya dengan F-CSRF-01. |
-| F-CSRF-03 | Infiltrasi identitas IDOR (memulangkan buku milik member spesifik lain) | CWE-639 | High | Yes | `idortest.png` | Kunci objek kueri transaksi ke otentikasi asli peminjam (`borrower=request.user`). |
-| F-AUTH-01 | Pengguna diguyur *lockout* usai melakukan eksploitasi *Brute-force* | CWE-307 | High | Yes | `auth_login_locked.png` | Tetap berlakukan pengaturan limit modul kontrol pembatasan `django-axes`. |
-| F-AUTH-02 | Pengamanan kata sandi pasca penyimpanan tercacah di DB | CWE-256 | Critical | Yes | `auth_pbkdf_hashed.png` | Pertahankan utilitas hashing algoritma `PBKDF2-SHA256` dari model `create_user()`. |
-| F-AUTH-03 | Penyalahgunaan/ *reuse session cookie* lawas sehabis interaksi *logout* | CWE-384 | High | Yes | `auth_logout_code.png` | Patenkan pengimplementasian metode pembersihan rekaman sisa lewat `session.flush()` di *views*. |
-| **F-AUTH-04** | Halaman *register* memaparkan opsi Role publik dengan bebas | CWE-287 | Medium | **Yes** | Konfirmasi UI registrasi | *Catatan*: *Dropdown* peran sengaja dipertahankan untuk keperluan pengujian (*testing purpose*) agar semua role (Member, Librarian, Admin) dapat didaftarkan secara mandiri. Pada *production*, opsi harus dibatasi ke `member` saja. |
-| F-PRIV-01 | Penjabaran ekses url non-Admin ke Panel Administrasi | CWE-285 | High | Yes | `rbac_1.png` & `rbac_2.png` | Lestarikan penugasan perlindungan lapis *decorator* identifikasi `@role_required()`. |
-| F-PRIV-02 | Pencegalan instrumen mandiri *deactivate/lockout* Administrator | CWE-269 | Medium | Yes | `rbac_3.png` | Validasi selalu pembedaan ID entitas target terhadap kepemilikan sang eksekutor di fungsi internal target. |
-| **F-PRIV-03** | Server disiarkan saat variabel rentan kerahasiaan `DEBUG = True` menguak *Source Code* | CWE-215 | Medium | **Yes** | `config_bugs_1.png` | `DEBUG` kini *default* `False`; nilai diambil dari *env var* `DEBUG`. `ALLOWED_HOSTS` juga dikunci via `ALLOWED_HOSTS` env var (default `localhost,127.0.0.1`). File `.env` lokal menyimpan `DEBUG=True` hanya untuk keperluan *development*. |
-| **F-PRIV-04** | Kemangkiran struktur HTTP *Security Headers (HSTS, CSP, X-Content-Type)* | CWE-693 / 319 | Medium | **Yes** | `config_bugs_2.png` | Ditambahkan `SECURE_CONTENT_TYPE_NOSNIFF=True`, `SECURE_BROWSER_XSS_FILTER=True`, `X_FRAME_OPTIONS='DENY'` di `settings.py`; serta *custom middleware* `SecurityHeadersMiddleware` (`main/middleware.py`) yang menyuntikkan header `Content-Security-Policy` ke setiap respons. |
-| **F-PRIV-05** | Ekskalasi posisi otorisasi pendaftaran mandiri (menuju *Admin* / *Librarian*) | CWE-269 | High | **Yes** | `config_bugs_3.png` & `4` | *Catatan*: Pendaftaran semua role sengaja dipertahankan untuk keperluan pengujian (*testing purpose*). Pada *production*, *backend* harus memaksa `role='member'` dan membatasi opsi *dropdown* ke `member` saja. |
-| F-XSS-01 | Percobaan Stored XSS ekspor sintaks `<script>` di atribut Judul buku | CWE-79 | Low | Yes | `xss_pentest_1.png` | Terapkan validator spesifik Regex guna mendepak muatan kelainan abjad. |
-| F-XSS-02 | Stored XSS disusupi di dalam isian ringkasan *Deskripsi* | CWE-79 | Low | Yes | `xss_pentest_2a.png`, dst. | Pertahankan praktik pembedahan tag HTML *form* lewati intervensi `_strip_html_tags()`. |
-| F-XSS-03 | Upaya penginjeksian *file* berbasis malware (*executable*) di *upload ebooks* | CWE-94 | High | Yes | `xss_pentest_3a.png`, dst. | Selalu jadikan deteksi mendalam MIME-type (`python-magic`) dasar keaslian penolakan sistem unggahan berkas palsu. |
-
----
-
-## Appendix
-
-### Entity Relationship Diagram (ERD)
-
-ERD dapat dilihat di: https://dbdiagram.io/d/69f8c2f6ddb9320fdccf8b33
-
-### Database Schema
-
-| Table | Description |
-|-------|-------------|
-| `users` | User accounts dengan role (member/librarian/admin), employee_id, membership_number |
-| `books` | Book catalog dengan soft delete, status (available/not_available) |
-| `categories` | Book categories |
-| `borrow_transactions` | Transaction tracking dengan employee_id & membership_number untuk accountability |
-| `audit_logs` | Audit trail dengan report_id unique dan generated_date |
-
-### OCL Invariants
-
-| Invariant | Implementation |
-|-----------|---------------|
-| `ValidStatusIntegrity` | Book.status ∈ {'available', 'not_available'} |
-| `ValidTransactionStatus` | BorrowTransaction.status ∈ {'borrowed', 'returned'} |
-| `AccountabilityEmployeeTracked` | employee_id NOT NULL untuk librarian |
-| `AccountabilityMemberTracked` | membership_number NOT NULL untuk member |
-| `AccountabilityAuditLogged` | report_id UNIQUE, generated_date NOT NULL |
-
-### CWE References
-
-| CWE | Nama | Mitigasi yang Diimplementasikan |
-|-----|------|---------------------------------|
-| **CWE-79** | XSS (Cross-site Scripting) | Allowlist regex, HTML tag stripping, Django auto-escape |
-| **CWE-20** | Improper Input Validation | RegexValidator + MaxLengthValidator di semua form |
-| **CWE-89** | SQL Injection | Django ORM Q objects, tanpa raw SQL |
-| **CWE-287** | Improper Authentication | PBKDF2 hashing, session management |
-| **CWE-307** | Brute Force | Rate limiting 5 percobaan = 15 menit lockout (django-axes) |
-| **CWE-256** | Plaintext Password Storage | `create_user()` otomatis hash PBKDF2 |
-| **CWE-352** | CSRF | CsrfViewMiddleware aktif, `{% csrf_token %}` di semua form POST |
-| **CWE-384** | Session Fixation | `session.flush()` saat logout, `SESSION_COOKIE_HTTPONLY=True` |
-| **CWE-639** | IDOR | Ownership check `borrower=request.user` pada return & history |
-| **CWE-269** | Improper Privilege Management | `@role_required` + self-modification protection |
-| **CWE-285** | Improper Authorization | `@role_required` di setiap view yang memerlukan otorisasi |
-| **CWE-862** | Missing Authorization | AuditLog mencatat semua aksi privileged untuk akuntabilitas |
+| Prioritas | ID | Finding | Affected Endpoint | CWE | Severity | Fixed? | Evidence | How to fix |
+|-----------|---|---|---|---|---|---|---|---|
+| 1 | F-SQLI-01 | Boolean-based injection (`' OR '1'='1'--`) pada search | `/books/search/` | CWE-89 | High | Yes | `sqli_pentest_1.png` | Terus pertahankan penggunaan parameterized query via objek Django ORM (`Q`). |
+| 1 | F-SQLI-02 | Stacked query `DROP TABLE` pada search | `/books/search/` | CWE-89 | High | Yes | `sqli_pentest_2.png` | Sama seperti F-SQLI-01, hindari eksekusi SQL mentah. |
+| 1 | F-SQLI-03 | UNION-based data exfiltration pada search | `/books/search/` | CWE-89 | High | Yes | `sqli_pentest_3.png` | Teruskan perlakuan pencegahan melalui Django ORM *objects*. |
+| 1 | F-SQLI-04 | Auth bypass parameter login `admin'--` | `/login/` | CWE-89 | High | Yes | Unit test `TC-SQLI-02` | Jangan mencabut perlindungan regex *allowlist* serta proses ORM. |
+| 1 | F-PRIV-01 | Penjabaran ekses url non-Admin ke Panel Administrasi | `/admin-panel/`, `/admin-panel/users/` | CWE-285 | High | Yes | `rbac_1.png` & `rbac_2.png` | Lestarikan penugasan perlindungan lapis *decorator* identifikasi `@role_required()`. |
+| 1 | F-PRIV-05 | Ekskalasi posisi otorisasi pendaftaran mandiri (menuju *Admin* / *Librarian*) | `/register/` | CWE-269 | High | **Yes** | `config_bugs_3.png` & `4` | *Catatan*: Pendaftaran semua role sengaja dipertahankan untuk keperluan pengujian (*testing purpose*). Pada *production*, *backend* harus memaksa `role='member'`. |
+| 1 | F-AUTH-01 | Brute-force login (> 5 percobaan gagal) | `/login/` | CWE-307 | High | Yes | `auth_login_locked.png` | Tetap berlakukan pengaturan limit modul kontrol pembatasan `django-axes`. |
+| 1 | F-AUTH-03 | Reuse session token setelah logout | `/member/` | CWE-384 | High | Yes | `auth_logout_code.png` | Patenkan pengimplementasian metode pembersihan rekaman sisa lewat `session.flush()`. |
+| 2 | F-AUTH-02 | Password disimpan plaintext di database | DB | CWE-256 | Critical | Yes | `auth_pbkdf_hashed.png` | Pertahankan utilitas hashing algoritma `PBKDF2-SHA256` dari model `create_user()`. |
+| 2 | F-CSRF-01 | CSRF token missing pada borrow | `/member/borrow/<id>/` | CWE-352 | Medium | Yes | `csrftokenmissing.png` | Tetap pertahankan kewajiban keberadaan *middleware* `CsrfViewMiddleware`. |
+| 2 | F-CSRF-02 | CSRF token invalid pada borrow | `/member/borrow/<id>/` | CWE-352 | Medium | Yes | `csrftokeninvalid.png` | Sama kriteria perlindungannya dengan F-CSRF-01. |
+| 2 | F-CSRF-03 | IDOR (memulangkan buku milik member lain) | `/member/return/<id>/` | CWE-639 | High | Yes | `idortest.png` | Kunci objek kueri transaksi ke otentikasi asli peminjam (`borrower=request.user`). |
+| 2 | F-PRIV-02 | Admin bisa self-deactivate | `/admin-panel/users/<id>/toggle/` | CWE-269 | Medium | Yes | `rbac_3.png` | Validasi selalu pembedaan ID entitas target terhadap kepemilikan sang eksekutor. |
+| 2 | F-AUTH-04 | Halaman *register* memaparkan opsi Role publik dengan bebas | `/register/` | CWE-287 | Medium | **Yes** | Form registrasi | *Catatan*: *Dropdown* peran sengaja dipertahankan untuk keperluan pengujian. Pada *production*, opsi harus dibatasi ke `member` saja. |
+| 3 | F-PRIV-03 | `DEBUG=True` — halaman error bocorkan *Source Code* | Semua endpoint (404/500) | CWE-215 | Medium | **Yes** | `config_bugs_1.png` | `DEBUG` kini *default* `False`; nilai diambil dari *env var* `DEBUG`. |
+| 3 | F-PRIV-04 | Kemangkiran struktur HTTP *Security Headers (HSTS, CSP, X-Content-Type)* | Semua respons HTTP | CWE-693 / 319 | Medium | **Yes** | `config_bugs_2.png` | Ditambahkan `SECURE_CONTENT_TYPE_NOSNIFF=True`, `X_FRAME_OPTIONS='DENY'` di `settings.py`; serta *custom middleware* `SecurityHeadersMiddleware`. |
+| 4 | F-XSS-01 | Stored XSS eksport sintaks `<script>` di atribut Judul buku | `/librarian/books/add/` | CWE-79 | Low | Yes | `xss_pentest_1.png` | Terapkan validator spesifik Regex guna mendepak muatan kelainan abjad. |
+| 4 | F-XSS-02 | Stored XSS disusupi di dalam isian ringkasan *Deskripsi* | `/librarian/books/add/` | CWE-79 | Low | Yes | `xss_pentest_2a.png`, dst. | Pertahankan praktik pembedahan tag HTML *form* lewati intervensi `_strip_html_tags()`. |
+| 4 | F-XSS-03 | Upaya penginjeksian *file* berbasis malware (*executable*) di *upload ebooks* | `/librarian/books/add/` | CWE-94 | High | Yes | `xss_pentest_3a.png`, dst. | Selalu jadikan deteksi mendalam MIME-type (`python-magic`) dasar keaslian penolakan sistem unggahan berkas palsu. |

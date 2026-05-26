@@ -1288,6 +1288,311 @@ class LibrarianRBACTests(TestCase):
         self.assertEqual(response.status_code, 302)
         self.assertIn('/login/', response.url)
 
+class CSRFLibrarianEndpointTests(TestCase):
+    """
+    CSRF protection on all librarian write endpoints.
+
+    Rubric requires testing *all* POST/DELETE endpoints, not just borrow/return.
+    Verifies CWE-352 mitigation on:
+    - add_book, update_book, delete_book
+    - add_category, update_category, delete_category
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        from main.models import Book, Category
+        cls.librarian = User.objects.create_user(
+            username='csrf_lib',
+            password='testpass123',
+            role='librarian',
+            employee_id='EMP-CSRF-LIB'
+        )
+        cls.category = Category.objects.create(name='CSRF Lib Category')
+        cls.book = Book.objects.create(
+            title='CSRF Lib Book',
+            author='Author',
+            isbn='111-222-333',
+            status='available',
+            category=cls.category,
+            created_by=cls.librarian,
+        )
+
+    def _csrf_client(self):
+        c = Client(enforce_csrf_checks=True)
+        c.force_login(self.librarian)
+        return c
+
+    def test_add_book_requires_csrf_token(self):
+        """POST /librarian/add-book/ without token → 403."""
+        response = self._csrf_client().post('/librarian/add-book/', {
+            'title': 'New Book',
+            'author': 'Author',
+            'isbn': '000-111-222',
+        })
+        self.assertEqual(response.status_code, 403)
+
+    def test_update_book_requires_csrf_token(self):
+        """POST /librarian/update-book/<id>/ without token → 403."""
+        response = self._csrf_client().post(
+            f'/librarian/update-book/{self.book.id}/',
+            {'title': 'Updated', 'author': 'Author', 'isbn': '111-222-333'}
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_delete_book_requires_csrf_token(self):
+        """POST /librarian/delete-book/<id>/ without token → 403."""
+        response = self._csrf_client().post(f'/librarian/delete-book/{self.book.id}/')
+        self.assertEqual(response.status_code, 403)
+        # Book must NOT be soft-deleted
+        self.book.refresh_from_db()
+        self.assertFalse(self.book.is_deleted)
+
+    def test_add_category_requires_csrf_token(self):
+        """POST /librarian/categories/add/ without token → 403."""
+        response = self._csrf_client().post('/librarian/categories/add/', {
+            'name': 'New Category',
+        })
+        self.assertEqual(response.status_code, 403)
+
+    def test_update_category_requires_csrf_token(self):
+        """POST /librarian/categories/<id>/update/ without token → 403."""
+        response = self._csrf_client().post(
+            f'/librarian/categories/{self.category.id}/update/',
+            {'name': 'Renamed Category'}
+        )
+        self.assertEqual(response.status_code, 403)
+        self.category.refresh_from_db()
+        self.assertEqual(self.category.name, 'CSRF Lib Category')
+
+    def test_delete_category_requires_csrf_token(self):
+        """POST /librarian/categories/<id>/delete/ without token → 403."""
+        from main.models import Category
+        extra_cat = Category.objects.create(name='To Delete Cat')
+        response = self._csrf_client().post(
+            f'/librarian/categories/{extra_cat.id}/delete/'
+        )
+        self.assertEqual(response.status_code, 403)
+        self.assertTrue(Category.objects.filter(id=extra_cat.id).exists())
+
+
+class CSRFAdminEndpointTests(TestCase):
+    """
+    CSRF protection on all admin write endpoints.
+
+    Verifies CWE-352 mitigation on:
+    - user_create, user_edit, user_toggle_active, user_change_role
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.admin = User.objects.create_user(
+            username='csrf_admin',
+            password='testpass123',
+            role='admin',
+        )
+        cls.target = User.objects.create_user(
+            username='csrf_target',
+            password='testpass123',
+            role='member',
+            membership_number='MBR-CSRF-TGT',
+        )
+
+    def _csrf_client(self):
+        c = Client(enforce_csrf_checks=True)
+        c.force_login(self.admin)
+        return c
+
+    def test_user_create_requires_csrf_token(self):
+        """POST /admin-panel/users/create/ without token → 403."""
+        response = self._csrf_client().post('/admin-panel/users/create/', {
+            'username': 'shouldnotexist',
+            'password': 'pass1234',
+            'role': 'member',
+        })
+        self.assertEqual(response.status_code, 403)
+        self.assertFalse(User.objects.filter(username='shouldnotexist').exists())
+
+    def test_user_toggle_requires_csrf_token(self):
+        """POST /admin-panel/users/<id>/toggle/ without token → 403."""
+        was_active = self.target.is_active
+        response = self._csrf_client().post(
+            f'/admin-panel/users/{self.target.id}/toggle/'
+        )
+        self.assertEqual(response.status_code, 403)
+        self.target.refresh_from_db()
+        self.assertEqual(self.target.is_active, was_active)
+
+    def test_user_change_role_requires_csrf_token(self):
+        """POST /admin-panel/users/<id>/role/ without token → 403."""
+        response = self._csrf_client().post(
+            f'/admin-panel/users/{self.target.id}/role/',
+            {'role': 'librarian'}
+        )
+        self.assertEqual(response.status_code, 403)
+        self.target.refresh_from_db()
+        self.assertEqual(self.target.role, 'member')
+
+    def test_user_edit_requires_csrf_token(self):
+        """POST /admin-panel/users/<id>/edit/ without token → 403."""
+        response = self._csrf_client().post(
+            f'/admin-panel/users/{self.target.id}/edit/',
+            {'username': 'hijacked', 'email': 'h@h.com'}
+        )
+        self.assertEqual(response.status_code, 403)
+        self.target.refresh_from_db()
+        self.assertEqual(self.target.username, 'csrf_target')
+
+
+class SQLInjectionCreateUpdateTests(TestCase):
+    """
+    SQL injection prevention on create and update endpoints.
+
+    Rubric requires covering login, search, filter, *create*, and *update*.
+    Verifies that SQLi payloads in form fields:
+    - Do not cause 500 errors
+    - Do not corrupt or expose database data
+    - Are handled safely by Django ORM (parameterized queries)
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        from main.models import Category
+        cls.librarian = User.objects.create_user(
+            username='sqli_lib',
+            password='testpass123',
+            role='librarian',
+            employee_id='EMP-SQLI-LIB',
+        )
+        cls.admin = User.objects.create_user(
+            username='sqli_admin',
+            password='testpass123',
+            role='admin',
+        )
+        cls.category = Category.objects.create(name='SQLi Test Category')
+
+    def test_sqli_payload_in_add_book_description(self):
+        """
+        SQLi payload in description field on add_book → no SQL error, ORM safe.
+
+        Description has no regex validator (only HTML strip), so classic SQLi
+        strings reach the ORM layer — which handles them as parameterized values.
+        """
+        self.client.force_login(self.librarian)
+
+        payloads = [
+            "' OR '1'='1'--",
+            "'; DROP TABLE books; --",
+            "' UNION SELECT username, password FROM users --",
+        ]
+        for payload in payloads:
+            response = self.client.post('/librarian/add-book/', {
+                'title': 'Safe Title',
+                'author': 'Safe Author',
+                'isbn': '978-0-00-000010-0',
+                'description': payload,
+                'category': self.category.id,
+            })
+            # Must not produce a server error
+            self.assertNotEqual(response.status_code, 500,
+                f"SQLi payload in description caused 500: {payload}")
+
+            # Main books table must still exist and be intact
+            from main.models import Book
+            self.assertGreaterEqual(Book.objects.count(), 0,
+                "Books table must survive SQLi payload in description")
+
+    def test_sqli_payload_rejected_by_title_validator(self):
+        """
+        SQLi payload containing = (not in allowlist) is rejected by title regex validator.
+
+        The title allowlist regex `^[a-zA-Z0-9\\s\\-\\.,;:!?\\'\"()&#+@/]+$`
+        does NOT include `=`, so boolean-based SQLi payloads are rejected at form level.
+        """
+        self.client.force_login(self.librarian)
+
+        boolean_payloads = [
+            "' OR '1'='1'--",      # contains =
+            "admin'=--",           # contains =
+        ]
+        for payload in boolean_payloads:
+            response = self.client.post('/librarian/add-book/', {
+                'title': payload,
+                'author': 'Author',
+                'isbn': '978-0-00-000011-0',
+                'description': 'desc',
+                'category': self.category.id,
+            })
+            # Regex validator should reject =, so form won't submit (no 302)
+            self.assertNotEqual(response.status_code, 302,
+                f"SQLi title with '=' should be rejected by validator: {payload}")
+
+    def test_sqli_in_update_book_no_error(self):
+        """
+        SQLi payload in update_book form → no SQL error, data integrity preserved.
+        """
+        from main.models import Book
+        book = Book.objects.create(
+            title='Update SQLi Book',
+            author='Author',
+            isbn='978-0-00-000012-0',
+            status='available',
+            category=self.category,
+            created_by=self.librarian,
+        )
+
+        self.client.force_login(self.librarian)
+
+        response = self.client.post(f'/librarian/update-book/{book.id}/', {
+            'title': 'Safe Title',
+            'author': 'Safe Author',
+            'isbn': '978-0-00-000012-0',
+            'description': "'; DROP TABLE books; --",
+            'category': self.category.id,
+        })
+
+        self.assertNotEqual(response.status_code, 500,
+            "SQLi payload in update form must not cause server error")
+        # Table must still exist
+        self.assertGreaterEqual(Book.objects.count(), 0,
+            "Books table must survive SQLi in update_book")
+
+    def test_sqli_in_admin_user_create_no_error(self):
+        """
+        SQLi payload in admin user_create form → handled safely by ORM.
+        """
+        self.client.force_login(self.admin)
+
+        response = self.client.post('/admin-panel/users/create/', {
+            'username': 'safeuser',
+            'email': 'safe@test.com',
+            'password': 'safepass1234',
+            'role': 'member',
+            'membership_number': "'; DROP TABLE users; --",
+        })
+
+        self.assertNotEqual(response.status_code, 500,
+            "SQLi in membership_number must not cause server error")
+        # Users table must still be intact
+        self.assertGreaterEqual(User.objects.count(), 0,
+            "Users table must survive SQLi in admin user_create")
+
+    def test_no_raw_sql_in_librarian_views(self):
+        """Verify librarian_views uses ORM only — no cursor.execute."""
+        from main import librarian_views
+        import inspect
+        source = inspect.getsource(librarian_views)
+        self.assertNotIn('cursor.execute', source,
+            "cursor.execute found in librarian_views — raw SQL not allowed")
+
+    def test_no_raw_sql_in_admin_views(self):
+        """Verify admin_views uses ORM only — no cursor.execute."""
+        from main import admin_views
+        import inspect
+        source = inspect.getsource(admin_views)
+        self.assertNotIn('cursor.execute', source,
+            "cursor.execute found in admin_views — raw SQL not allowed")
+
+
 class AdminFeatureTests(TestCase):
     """
     Test admin-panel features (Galih).
