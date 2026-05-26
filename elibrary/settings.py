@@ -13,9 +13,9 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 SECRET_KEY = os.getenv('SECRET_KEY', 'django-insecure-dev-key-change-in-production')
 
-DEBUG = os.getenv('DEBUG', 'True') == 'True'
+DEBUG = os.getenv('DEBUG', 'False') == 'True'
 
-ALLOWED_HOSTS = ['*']
+ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',')
 
 INSTALLED_APPS = [
     'django.contrib.admin',
@@ -37,6 +37,7 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    'main.middleware.SecurityHeadersMiddleware',
 ]
 
 ROOT_URLCONF = 'elibrary.urls'
@@ -115,6 +116,11 @@ AXES_FAILURE_LIMIT = 5
 AXES_COOLOFF_TIME = datetime.timedelta(minutes=15)
 AXES_RESET_ON_SUCCESS = True
 AXES_LOCKOUT_PARAMETERS = ['ip_address']
+
+# Security headers (CWE-693 / CWE-319 mitigation)
+SECURE_CONTENT_TYPE_NOSNIFF = True   # X-Content-Type-Options: nosniff
+SECURE_BROWSER_XSS_FILTER = True     # X-XSS-Protection: 1; mode=block
+X_FRAME_OPTIONS = 'DENY'             # X-Frame-Options: DENY (via XFrameOptionsMiddleware)
 
 # Session security settings
 SESSION_COOKIE_HTTPONLY = True      # Prevent JavaScript access to session cookie

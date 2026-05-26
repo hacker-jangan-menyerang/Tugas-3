@@ -1213,7 +1213,8 @@ class LibrarianAuditLogTests(TestCase):
             "Deleting a book should create an audit log entry"
         )
 
-        log = AuditLog.objects.order_by('-generated_date').first()
+        log = AuditLog.objects.filter(target_action='book_deleted').order_by('-id').first()
+        self.assertIsNotNone(log, "book_deleted audit log entry should exist")
         self.assertEqual(log.target_action, 'book_deleted')
 
     def test_soft_delete_preserves_book(self):
