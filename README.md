@@ -569,7 +569,32 @@ Subbab berikut menjelaskan test per topik keamanan (penomoran mengikuti Bagian 2
 
 ### 7.1 Code Injection Prevention (CWE-79 / 20 / 94) — Roberto Eugenio Sugiarto (2406355640)
 
-> _TODO: jelaskan `XSSPreventionTests`, `InputValidationTests`, `FileUploadSecurityTests`._
+**Diuji:** form validasi librarian ([`main/librarian_forms.py`](main/librarian_forms.py)) dan template auto-escaping. **Test:** `XSSPreventionTests`, `InputValidationTests`, `FileUploadSecurityTests` di `main/tests.py`, semua PASS.
+
+#### `XSSPreventionTests` — Pencegahan XSS pada Form Librarian
+
+| Method | TC-ID | Yang diuji | Cara kerja | Hasil yang diharapkan |
+|--------|-------|------------|------------|----------------------|
+| `test_tc_xss_01_script_tag_in_book_title` | TC-XSS-01 | Allowlist regex pada title (CWE-79) | POST tambah buku dengan title `<script>alert(1)</script>` | Form ditolak (bukan `302`); tidak ada buku dengan `<script>` di DB |
+| `test_tc_xss_02_xss_in_category_name` | TC-XSS-02 | Allowlist regex pada category name (CWE-79) | POST tambah kategori dengan `<img src=x onerror=alert(1)>` | Form ditolak; tidak ada kategori XSS di DB |
+| `test_xss_in_description_stripped` | — | HTML tag stripping di description (CWE-79) | POST buku dengan description `Hello <script>alert("xss")</script> world` | Jika berhasil tersimpan, `<script>` sudah dihapus; hanya teks `Hello world` tersimpan |
+| `test_auto_escaping_in_template` | — | Django auto-escaping (CWE-79) | Buat buku langsung ke DB dengan title `<script>` → GET halaman daftar buku | Response HTML mengandung `&lt;script&gt;` bukan `<script>` — tag tidak dieksekusi browser |
+
+Dua lapis pertahanan yang diuji: (1) regex allowlist di `BookForm` / `CategoryForm` menolak karakter `<`, `>` sebelum masuk database; (2) jika data berbahaya masuk DB secara langsung, Django auto-escaping memastikan tag dirender sebagai teks, bukan dieksekusi.
+
+#### `InputValidationTests` — Validasi Field Wajib dan Format (CWE-20)
+
+| Method | TC-ID | Yang diuji | Hasil yang diharapkan |
+|--------|-------|------------|----------------------|
+| `test_tc_input_01_missing_required_fields` | TC-INPUT-01 | Field title/author/isbn kosong | Form ditolak; 0 buku dibuat di DB |
+| `test_isbn_only_numbers_and_hyphens` | — | ISBN dengan karakter `ABC-INVALID` | Form ditolak; hanya format `[0-9\-]` diterima |
+
+#### `FileUploadSecurityTests` — Validasi File Upload eBook (CWE-94)
+
+| Method | TC-ID | Yang diuji | Cara kerja | Hasil yang diharapkan |
+|--------|-------|------------|------------|----------------------|
+| `test_tc_file_01_exe_disguised_as_pdf` | TC-FILE-01 | MIME type check (extension ≠ content) | Upload file dengan ekstensi `.pdf` tapi header konten `MZ` (EXE magic bytes) | File ditolak atau disimpan tanpa ekstensi `.exe`; tidak ada file EXE tersimpan di server |
+| `test_exe_extension_rejected` | — | Extension allowlist | Upload file `malware.exe` langsung | Form ditolak — ekstensi `.exe` tidak masuk allowlist `.pdf/.epub/.txt` |
 
 ### 7.2 Broken Authentication Mitigation (CWE-287 / 307 / 256 / 384) — Kevin Cornellius Widjaja (2406428781)
 
@@ -665,7 +690,57 @@ Semua query database memakai Django ORM (parameterized query), sehingga payload 
 
 ### 7.5 Privilege Escalation Mitigation (CWE-269 / 285 / 862) — Galih Nur Rizqy (2406343224)
 
-> _TODO: jelaskan `AdminFeatureTests`, `RoleAccessTests`, `LibrarianRBACTests`._
+**Diuji:** kontrol akses berbasis role di seluruh panel admin ([`main/admin_views.py`](main/admin_views.py)), decorator RBAC ([`main/decorators.py`](main/decorators.py)), dan audit log ([`main/audit.py`](main/audit.py)). **Test:** `AdminFeatureTests`, `RoleAccessTests`, `LibrarianRBACTests` di `main/tests.py`, semua PASS.
+
+![Seluruh AdminFeatureTests PASS](assets/images/unittest_pass.png)
+
+#### `AdminFeatureTests` — Kontrol Akses Admin Panel (TC-ADMIN-01..07)
+
+Kelas ini memverifikasi bahwa panel admin hanya dapat diakses dan dioperasikan oleh user dengan role `admin`, serta bahwa setiap aksi admin dicatat di `AuditLog` tanpa credential leakage (CWE-269 / 285 / 862):
+
+| Method | TC-ID | Yang diuji | Cara kerja | Hasil yang diharapkan |
+|--------|-------|------------|------------|----------------------|
+| `test_tc_admin_01_member_blocked_from_admin_panel` | TC-ADMIN-01 | Least privilege (CWE-285) | Member `force_login` → GET `/admin-panel/` | `403 Forbidden` — `@role_required('admin')` menolak role `member` |
+| `test_tc_admin_02_librarian_blocked_from_user_list` | TC-ADMIN-02 | Least privilege (CWE-285) | Librarian `force_login` → GET `/admin-panel/users/` | `403 Forbidden` — librarian tidak punya akses admin |
+| `test_tc_admin_03_admin_can_list_users` | TC-ADMIN-03 | Akses sah (CWE-862) | Admin `force_login` → GET `/admin-panel/users/` | `200 OK` + username user lain terlihat di response body |
+| `test_tc_admin_04_create_user_logs_audit` | TC-ADMIN-04 | Akuntabilitas (CWE-862) | Admin POST create user baru → cek DB dan AuditLog | User ada di DB + `AuditLog` berisi entri `user_created` |
+| `test_tc_admin_05_admin_cannot_deactivate_self` | TC-ADMIN-05 | Self-modification protection (CWE-269) | Admin POST toggle active pada `user_id` dirinya sendiri | `is_active` tetap `True`; response bukan `200` tanpa pesan sukses |
+| `test_tc_admin_06_role_change_logged` | TC-ADMIN-06 | Akuntabilitas role change (CWE-862) | Admin ubah role member → cek DB dan AuditLog | Role berubah di DB + entri `user_role_changed` di `audit_logs` |
+| `test_tc_admin_07_audit_log_no_password_leak` | TC-ADMIN-07 | Credential leakage prevention (CWE-532) | Panggil `create_audit_log()` dengan `details` mengandung substring `'password'` | `ValueError` dilempar — data tidak tersimpan ke DB |
+
+Implementasi perlindungan self-deactivation di [`main/admin_views.py`](main/admin_views.py):
+```python
+if target_user.id == request.user.id:
+    messages.error(request, 'You cannot deactivate your own account.')
+    return redirect('main:user_detail', user_id=target_user.id)
+```
+
+Perlindungan credential leakage di [`main/audit.py`](main/audit.py):
+```python
+if any(kw in details.lower() for kw in ('password', 'token')):
+    raise ValueError("AuditLog.details must not contain credentials.")
+```
+
+#### `RoleAccessTests` — Cross-Role Access Prevention
+
+Kelas ini memverifikasi bahwa setiap role hanya bisa mengakses halaman miliknya dan diblokir dari halaman role lain:
+
+| Method | Yang diuji | Hasil yang diharapkan |
+|--------|------------|----------------------|
+| `test_member_can_access_member_dashboard` | Member GET `/member/` | `200 OK` |
+| `test_librarian_cannot_access_member_dashboard` | Librarian GET `/member/` | `403 Forbidden` |
+| `test_unauthenticated_redirects_to_login` | Unauthenticated GET `/member/` | `302` ke `/login/` |
+
+#### `LibrarianRBACTests` — Librarian Role Isolation
+
+Kelas ini memverifikasi bahwa kontrol akses berlaku pada fitur librarian — librarian bisa akses dashboard-nya sendiri, tapi member dan user anonim tidak bisa:
+
+| Method | Yang diuji | Hasil yang diharapkan |
+|--------|------------|----------------------|
+| `test_librarian_can_access_dashboard` | Librarian GET `/librarian/` | `200 OK` |
+| `test_member_cannot_access_librarian_dashboard` | Member GET `/librarian/` | `403 Forbidden` |
+| `test_member_cannot_add_book` | Member POST `/librarian/books/add/` | `403 Forbidden` |
+| `test_unauthenticated_redirects` | Unauthenticated GET `/librarian/` | `302` ke `/login/` |
 
 ---
 
@@ -736,7 +811,29 @@ flowchart LR
 
 ### 8.3 Scanning & Enumeration
 
-> _TODO: hasil scan otomatis/manual (mis. ZAP) untuk SQLi, Broken Authentication, CSRF, dan Code Injection._
+Scanning dilakukan dengan dua tool: **OWASP ZAP** (otomatis) dan **curl** (manual header inspection).
+
+**OWASP ZAP Passive Scan** dijalankan terhadap `http://127.0.0.1:8000/` dengan autentikasi sebagai member. Hasilnya: **0 High, 2 Medium, 4 Low, 4 Informational**.
+
+Alert Medium:
+- *Content Security Policy (CSP) Header Not Set* — CSP tidak diset, membuka potensi XSS via inline script dari CDN.
+- *Sub Resource Integrity (SRI) Not Set* — Tailwind CSS dimuat dari CDN tanpa integrity hash; file CDN yang dikompromikan bisa menjalankan script berbahaya.
+
+Alert Low (ringkasan):
+- *Server Leaks Version Information via "Server" HTTP Response Header*
+- *Missing Anti-clickjacking Header* (X-Frame-Options sudah ada via Django SecurityMiddleware, ZAP versi ini masih flag)
+- *Strict-Transport-Security Header Not Set*
+- *X-Content-Type-Options Header Missing* (sebagian endpoint)
+
+Laporan lengkap: [`assets/zap_report.html`](assets/zap_report.html).
+
+![OWASP ZAP scan results](assets/images/zap_alerts.png)
+
+**curl header inspection** (`curl -I http://127.0.0.1:8000/login/`) mengkonfirmasi response headers yang ada dan yang tidak ada:
+
+![curl -I response headers](assets/images/curl_result.png)
+
+Tidak ditemukan endpoint yang mengembalikan data SQL error atau stack trace pada input berbahaya — semua payload diproses melalui Django ORM dan dikembalikan sebagai 0 hasil atau form error biasa.
 
 ### 8.4 Exploitation & Testing
 
@@ -838,6 +935,74 @@ Implementasi `session.flush()` pada logout view:
 Kesimpulan: tiga dari empat kontrol autentikasi sudah terimplementasi dengan baik. Satu temuan nyata (F-AUTH-04): form registrasi mengekspos semua pilihan role — pada sistem produksi harus dibatasi ke `member` saja.
 
 
+
+#### Privilege Escalation & Misconfiguration (CWE-269 / 285 / 862) — Galih Nur Rizqy (2406343224)
+
+Pengujian dilakukan dalam dua kelompok: (a) verifikasi kontrol akses RBAC dan (b) temuan konfigurasi nyata yang menjadi celah keamanan.
+
+##### A. RBAC Testing
+
+**1. Member mencoba akses `/admin-panel/` (TC-ADMIN-01)**
+
+Login sebagai `member1 / member123`, navigasi langsung ke `http://127.0.0.1:8000/admin-panel/`. Django mengembalikan 403 Forbidden karena decorator `@role_required('admin')` menolak role `member`.
+
+![Member blocked dari /admin-panel/](assets/images/rbac_1.png)
+
+**2. Librarian mencoba akses `/admin-panel/users/` (TC-ADMIN-02)**
+
+Login sebagai `librarian1 / librarian123`, navigasi ke `/admin-panel/users/`. Django mengembalikan 403 Forbidden — librarian tidak memiliki role `admin`.
+
+![Librarian blocked dari /admin-panel/users/](assets/images/rbac_2.png)
+
+**3. Admin tidak bisa deactivate dirinya sendiri (TC-ADMIN-05)**
+
+Login sebagai `admin / admin123`, masuk ke halaman user list. Tombol Deactivate untuk akun admin sendiri tidak ditampilkan di UI (UI-level protection). Backend juga menolak POST request langsung via curl:
+
+```bash
+curl -c cookies.txt -b cookies.txt -s \
+  -X POST http://localhost:8000/admin-panel/users/1/toggle/ \
+  -d "csrfmiddlewaretoken=<token>" \
+  -H "Referer: http://localhost:8000/admin-panel/users/" \
+  -w "\nHTTP Status: %{http_code}\n"
+```
+
+![Admin self-deactivation blocked](assets/images/rbac_3.png)
+
+##### B. Config Vulnerability Findings
+
+**Finding F-PRIV-01 — DEBUG=True (Information Disclosure)**
+
+`elibrary/settings.py` baris `DEBUG = os.getenv('DEBUG', 'True') == 'True'` — default bernilai `True`. Saat URL tidak ditemukan, Django menampilkan halaman debug penuh berisi path file server, versi library, dan konfigurasi environment.
+
+![Django debug page — info disclosure](assets/images/config_bugs_1.png)
+
+**Finding F-PRIV-02 — Missing Security Headers**
+
+Response headers aplikasi tidak mengandung `Content-Security-Policy`, `Strict-Transport-Security`, atau `X-Content-Type-Options`. Dikonfirmasi via DevTools → Network → Response Headers.
+
+![Missing security headers di DevTools](assets/images/config_bugs_2.png)
+
+**Finding F-PRIV-03 — Self-Registration Sebagai Role Privileged**
+
+Halaman `/register/` menampilkan semua pilihan role termasuk `Admin` dan `Librarian`. User anonim dapat mendaftar langsung sebagai Admin dan mengakses seluruh panel admin.
+
+![Form registrasi mengekspos semua role](assets/images/config_bugs_3.png)
+
+**Finding F-PRIV-04 — Akun Admin Hasil Self-Register Bisa Akses Panel Admin**
+
+Setelah mendaftar dengan role Admin melalui `/register/`, akun baru berhasil login dan mengakses `/admin-panel/` dengan penuh.
+
+![Akun self-registered admin akses panel](assets/images/config_bugs_4.png)
+
+**Temuan (F-PRIV):**
+
+| ID | Temuan | CWE | Severity | Status | Bukti | Rekomendasi |
+|----|--------|-----|----------|--------|-------|-------------|
+| F-PRIV-01 | Member/Librarian dapat akses halaman admin via URL langsung | CWE-285 | High | **Aman** — 403 Forbidden oleh `@role_required('admin')` | `rbac_1.png`, `rbac_2.png`, TC-ADMIN-01, TC-ADMIN-02 | Sudah terimplementasi |
+| F-PRIV-02 | Admin bisa self-deactivate (self-lockout) | CWE-269 | Medium | **Aman** — diblokir UI + backend check | `rbac_3.png`, TC-ADMIN-05 | Sudah terimplementasi |
+| F-PRIV-03 | `DEBUG=True` — halaman error bocorkan info internal | CWE-215 | Medium | **Rentan** — stack trace terekspos | `config_bugs_1.png` | Set `DEBUG=False` di production; gunakan env var |
+| F-PRIV-04 | Missing `Content-Security-Policy` dan `Strict-Transport-Security` | CWE-693 | Medium | **Rentan** — header tidak ada | `config_bugs_2.png`, ZAP alerts | Tambah `django-csp`; set `SECURE_HSTS_SECONDS` di settings |
+| F-PRIV-05 | Self-registration ke role Admin/Librarian via `/register/` | CWE-269 | High | **Rentan** (by design untuk demo) | `config_bugs_3.png`, `config_bugs_4.png` | Batasi ChoiceField ke `member` saja; Admin/Librarian dibuat via admin panel |
 
 ### 8.5 Reporting & Remediation
 
